@@ -81,6 +81,7 @@ mod tests {
             }],
             device_args: vec![],
             extra_args: vec![],
+            packages: vec![],
             command: vec![],
             interactive: true,
             workdir: None,

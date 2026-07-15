@@ -95,6 +95,7 @@ pub fn plan(overrides: &Overrides, command: Vec<String>, interactive: bool) -> R
         mounts: spec_mounts,
         device_args,
         extra_args: integration.extra_args.clone(),
+        packages: resolved.packages.clone(),
         command,
         interactive,
         workdir: integration.workdir.clone(),

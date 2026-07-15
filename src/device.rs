@@ -44,7 +44,12 @@ pub fn plan(class: &GpuClass) -> DeviceInjection {
         GpuClass::Nvidia { .. } => nvidia_injection(),
         GpuClass::Amd { .. } => amd_injection(),
         GpuClass::Intel { .. } => intel_injection(),
-        GpuClass::Vulkan | GpuClass::Apple | GpuClass::None => DeviceInjection::default(),
+        // A GPU was detected (a real /dev/dri render node exists) but
+        // couldn't be attributed to a known vendor - still hand the
+        // render node through, since Mesa's Vulkan/OpenGL drivers only
+        // need /dev/dri, not a vendor-specific device.
+        GpuClass::Vulkan => vulkan_injection(),
+        GpuClass::Apple | GpuClass::None => DeviceInjection::default(),
     }
 }
 
@@ -89,6 +94,16 @@ fn intel_injection() -> DeviceInjection {
         args: vec!["--device".into(), "/dev/dri".into()],
         library_mounts: Vec::new(),
         reason: "--device /dev/dri for Intel VA-API/oneAPI Level Zero".into(),
+    }
+}
+
+fn vulkan_injection() -> DeviceInjection {
+    DeviceInjection {
+        args: vec!["--device".into(), "/dev/dri".into()],
+        library_mounts: Vec::new(),
+        reason: "--device /dev/dri for the Mesa Vulkan/OpenGL fallback (vendor unrecognized \
+                 or hardware without PCI ids, e.g. an SoC-integrated GPU)"
+            .into(),
     }
 }
 
@@ -141,9 +156,18 @@ mod tests {
     }
 
     #[test]
-    fn plan_is_noop_for_vulkan_apple_and_none() {
-        assert_eq!(plan(&GpuClass::Vulkan), DeviceInjection::default());
+    fn plan_is_noop_for_apple_and_none() {
         assert_eq!(plan(&GpuClass::Apple), DeviceInjection::default());
         assert_eq!(plan(&GpuClass::None), DeviceInjection::default());
+    }
+
+    #[test]
+    fn vulkan_still_gets_the_dri_render_node() {
+        // Regression test: a detected-but-unclassified GPU (e.g. an
+        // SoC-integrated one with no PCI vendor/device ids) must still get
+        // /dev/dri, or nothing inside the container can touch the GPU at
+        // all, GPU-vendor-neutral Vulkan/Mesa included.
+        let injection = plan(&GpuClass::Vulkan);
+        assert_eq!(injection.args, vec!["--device", "/dev/dri"]);
     }
 }

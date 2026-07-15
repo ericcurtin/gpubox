@@ -25,7 +25,13 @@ Five stages, each its own module:
    architecture on macOS (Apple Silicon = Apple GPU). Classifies into
    NVIDIA (+ CUDA compute capability), AMD (+ gfx architecture), Intel
    (Arc / Xe / older iGPU), Apple Silicon, generic Vulkan, or CPU
-   fallback. Raw ID -> arch tag mappings live in `data/pci_ids.toml`.
+   fallback. Raw ID -> arch tag mappings live in `data/pci_ids.toml`. Not
+   every GPU is a PCI device: SoC-integrated GPUs (Apple Silicon under
+   Asahi Linux, NVIDIA's Tegra/Grace-family SoCs) show up as *platform*
+   devices with no PCI vendor/device attribute files - these are still
+   detected (not silently dropped to the CPU fallback), classified via a
+   best-effort guess from the device tree `compatible` string when
+   possible, or generic Vulkan otherwise.
 
 2. **Stack resolution** (`src/stack.rs`) - maps a classification to a
    runtime stack, a default container image, and any environment
@@ -42,10 +48,20 @@ Five stages, each its own module:
    libraries read-only so they match the host kernel driver's version.
 
 4. **Host integration** (`src/mounts.rs`) - mounts `$HOME` (dotfiles
-   included) and the current working directory, maps the host uid/gid in
-   (`--userns=keep-id` on Podman, `-u uid:gid` on Docker), forwards
-   X11/Wayland sockets for GUI apps, and sets `GPUBOX_STACK` so shells can
-   show a `(gpubox:rocm)`-style prompt marker.
+   included) and the current working directory, forwards X11/Wayland
+   sockets for GUI apps, and sets `GPUBOX_STACK` so shells can show a
+   `(gpubox:rocm)`-style prompt marker. On Linux, the container is always
+   made to *be* the real host user rather than trusting whatever account
+   happens to already own the mapped uid in the base image - `ubuntu:24.04`
+   itself ships a baked-in `ubuntu:x:1000:1000:...:/home/ubuntu` account,
+   and 1000 is the default first-user uid on most distros, so without
+   this a very common uid collision would silently "log you in" as that
+   placeholder instead of yourself. `$HOME`/`$USER`/`$LOGNAME` are forced
+   via `-e`, and the container runs a small wrapper (`src/backend/linux.rs`)
+   that, as root, rewrites `/etc/passwd`/`/etc/group` with your real
+   identity, installs any stack-specific apt packages (e.g. the Vulkan
+   fallback's `mesa-vulkan-drivers`), and only then drops to your uid/gid
+   via `setpriv` before exec'ing your shell or command.
 
 5. **Doctor** (`src/doctor.rs`) - `gpubox doctor` prints what was
    detected, which stack was chosen and why, and how to override it.

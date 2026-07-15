@@ -32,6 +32,10 @@ pub struct LaunchSpec {
     pub device_args: Vec<String>,
     /// Additional raw engine flags (e.g. `--userns=keep-id`, `-u uid:gid`).
     pub extra_args: Vec<String>,
+    /// Apt packages the Linux backend must install inside the container
+    /// before running `command` (see [`crate::stack::ResolvedStack::packages`]).
+    /// Ignored by the macOS/Windows backends.
+    pub packages: Vec<String>,
     /// Command to run inside the sandbox. Empty means "interactive shell".
     pub command: Vec<String>,
     pub interactive: bool,

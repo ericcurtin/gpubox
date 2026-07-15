@@ -185,9 +185,18 @@ fn render_quadlet(spec: &LaunchSpec) -> String {
     out.push('\n');
     out.push_str("[Container]\n");
     let _ = writeln!(out, "Image={}", spec.image);
-    if !spec.command.is_empty() {
-        let _ = writeln!(out, "Exec={}", spec.command.join(" "));
-    }
+    // Use the exact same wrapper argv `enter`/`run` would exec inside the
+    // container (passwd/group fixup, optional apt install, privilege
+    // drop via setpriv - see backend::linux), shell-quoted, so the
+    // generated unit is faithful to what gpubox actually does rather
+    // than just the bare user command.
+    let command_argv = backend::linux::command_argv(spec);
+    let quoted_command = command_argv
+        .iter()
+        .map(|a| shell_quote(a))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let _ = writeln!(out, "Exec={quoted_command}");
     for mount in &spec.mounts {
         let ro = if mount.read_only { ",ro" } else { "" };
         let _ = writeln!(
@@ -292,6 +301,7 @@ mod tests {
             }],
             device_args: vec!["--device".to_string(), "/dev/dri".to_string()],
             extra_args: vec!["--group-add".to_string(), "keep-groups".to_string()],
+            packages: vec![],
             command: vec![],
             interactive: true,
             workdir: Some(PathBuf::from("/home/alice/project")),
