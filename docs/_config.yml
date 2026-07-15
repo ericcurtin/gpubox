@@ -1,4 +1,4 @@
 theme: jekyll-theme-minimal
 title: gpubox
-description: Auto-detecting GPU container launcher - distrobox-style host integration, no host GPU driver install required.
+description: Auto-detecting GPU container launcher.
 show_downloads: false

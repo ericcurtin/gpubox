@@ -12,8 +12,7 @@ use std::path::PathBuf;
 #[command(
     name = "gpubox",
     version,
-    about = "Auto-detecting GPU container launcher - distrobox-style host integration, \
-             no host GPU driver install required."
+    about = "Auto-detecting GPU container launcher."
 )]
 pub struct Cli {
     /// Force a specific backend instead of the platform default (docker,

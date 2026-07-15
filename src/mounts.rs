@@ -125,9 +125,9 @@ fn home_dir() -> Option<PathBuf> {
     }
 }
 
-/// Build the standard distrobox-style set of host bindings for the given
-/// container engine ("docker" or "podman") and resolved stack tag (used
-/// only for the prompt marker).
+/// Build the standard set of host bindings for the given container engine
+/// ("docker" or "podman") and resolved stack tag (used only for the prompt
+/// marker).
 pub fn plan(engine: &str, stack: &str) -> HostIntegration {
     let mut integration = HostIntegration::default();
 

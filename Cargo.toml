@@ -2,7 +2,7 @@
 name = "gpubox"
 version = "0.1.0"
 edition = "2021"
-description = "Auto-detecting GPU container launcher: distrobox-style host integration, zero host GPU driver install required"
+description = "Auto-detecting GPU container launcher"
 license = "Apache-2.0"
 repository = "https://github.com/ericcurtin/gpubox"
 readme = "README.md"
