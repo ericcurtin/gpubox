@@ -2,7 +2,7 @@
 
 _See also: [Introducing gpubox](https://ericcurtin.github.io/gpubox/blog/2026-07-15-introducing-gpubox.html), the announcement post._
 
-Auto-detecting GPU container launcher. Type one command - `gpubox enter` -
+Auto-detecting GPU container launcher. Type one command - `gpubox run` -
 and land in a shell where `nvidia-smi`, `rocm-smi`, or `vulkaninfo` just
 works, with your home directory, dotfiles, and current working directory
 mounted through. The host needs nothing GPU-vendor
@@ -10,7 +10,7 @@ specific installed; gpubox figures out what's there and picks the right
 container image for you.
 
 ```
-$ gpubox enter
+$ gpubox run
 (gpubox:rocm) you@host:~/project$ rocm-smi
 ...
 ```
@@ -81,18 +81,29 @@ a Seatbelt `.sb` profile, a Windows Sandbox `.wsb` config, or a VS Code
 `devcontainer.json` - so the "magic" is reproducible in CI, checked into a
 repo, or opened straight in Dev Containers/Codespaces.
 
-## Persistent containers by default
+## One command: `gpubox run`
 
-Containers are persistent, the same model distrobox/toolbox use:
-`gpubox enter`/`gpubox run` create a container named after the resolved
-stack (`gpubox-cuda`, `gpubox-rocm`, `gpubox-vulkan`, ...) the first time,
-then reattach to it on every later invocation instead of tearing it down
-- anything `apt install`ed inside it is still there next time, and the
-Vulkan/CPU fallback's `mesa-vulkan-drivers` et al. only ever get installed
-once instead of on every single launch:
+`enter` and `run` are the same command. With no trailing command, `gpubox
+run` is an interactive shell; with one (after `--`), it runs
+non-interactively and exits:
 
 ```
-gpubox enter                   # first run: creates gpubox-<stack>; every run after: reattaches
+gpubox run                       # interactive shell
+gpubox run -- python train.py    # non-interactive
+```
+
+## Persistent containers by default
+
+Containers are persistent, the same model distrobox/toolbox use: `gpubox
+run` creates a single container, named `gpubox`, the first time, then
+reattaches to it on every later invocation instead of tearing it down -
+regardless of which stack/hardware config resolved that particular
+invocation - anything `apt install`ed inside it is still there next time,
+and the Vulkan/CPU fallback's `mesa-vulkan-drivers` et al. only ever get
+installed once instead of on every single launch:
+
+```
+gpubox run                     # first run: creates `gpubox`; every run after: reattaches
 gpubox run -- python train.py
 gpubox rm                      # delete the default container and start fresh next time
 ```
@@ -101,11 +112,11 @@ Override the container name with `--name`, or opt back into the old
 one-off `--rm` behavior for a single invocation:
 
 ```
-gpubox enter --name ml         # a separate, independently-named persistent container
+gpubox run --name ml                       # a separate, independently-named persistent container
 gpubox run --name ml -- python train.py
 gpubox rm ml
 
-gpubox enter --rm              # throwaway container, torn down on exit (e.g. for CI)
+gpubox run --rm                            # throwaway container, torn down on exit (e.g. for CI)
 ```
 
 (Docker/Podman only - Seatbelt runs natively on the host with nothing to
@@ -127,7 +138,7 @@ discrete AMD > Intel Arc/Xe > other iGPUs > Apple > Vulkan > none) is
 just the *default* - override it explicitly:
 
 ```
-gpubox enter nvidia        # positional vendor selector
+gpubox --gpu nvidia run    # coarse vendor name
 gpubox --gpu 1 doctor      # 0-based index into the detected list
 gpubox --gpu amd run -- rocm-smi
 ```
@@ -184,10 +195,10 @@ any of them per-invocation with `--image`, or permanently by editing
 ## Usage
 
 ```
-gpubox enter                     # interactive shell in the persistent gpubox-<stack> container
-gpubox enter --name ml           # a separate, independently-named persistent container
+gpubox run                       # interactive shell in the persistent `gpubox` container
+gpubox run --name ml             # a separate, independently-named persistent container
 gpubox run -- python train.py    # non-interactive, same persistence
-gpubox enter --rm                # throwaway container for this run only
+gpubox run --rm                  # throwaway container for this run only
 gpubox rm                        # delete the default container
 gpubox rm ml                     # delete a specifically-named one
 gpubox generate --format compose -o compose.yaml
@@ -210,10 +221,10 @@ Global overrides (work with every subcommand):
 --dry-run
 ```
 
-`enter`/`run`-specific:
+`run`-specific:
 
 ```
---name <name>   use this container name instead of the default (the resolved stack)
+--name <name>   use this container name instead of the default (`gpubox`)
 --rm            use a throwaway container for this run instead of the persistent default
 ```
 

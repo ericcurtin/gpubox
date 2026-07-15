@@ -1,7 +1,7 @@
 //! End-to-end CLI tests for the "persistent by default" behavior: every
-//! `enter`/`run` should reattach to a container named after the resolved
-//! stack unless `--rm` (throwaway) or `--name <other>` says otherwise.
-//! Runs the actual compiled binary with `--dry-run` (which never touches
+//! `gpubox run` should reattach to a single default container (`gpubox`)
+//! unless `--rm` (throwaway) or `--name <other>` says otherwise. Runs the
+//! actual compiled binary with `--dry-run` (which never touches
 //! docker/podman) so these exercise the real argument parsing and
 //! dispatch in `src/cli.rs`, not just the library functions it calls.
 
@@ -24,30 +24,30 @@ fn stdout_of(cmd: &mut Command) -> String {
 }
 
 #[test]
-fn enter_defaults_to_a_persistent_container_named_after_the_stack() {
+fn interactive_run_defaults_to_the_single_persistent_gpubox_container() {
     let out = stdout_of(gpubox().args([
         "--gfx-override",
         "cpu",
         "--backend",
         "docker",
-        "enter",
+        "run",
         "--dry-run",
     ]));
-    assert!(out.contains("container: gpubox-cpu"));
-    assert!(out.contains("docker run -d --name gpubox-cpu"));
+    assert!(out.contains("container: gpubox "));
+    assert!(out.contains("docker run -d --name gpubox "));
     assert!(out.contains("docker exec"));
     // No `--rm` container flag anywhere in the persistent path.
     assert!(!out.contains("run --rm"));
 }
 
 #[test]
-fn enter_rm_falls_back_to_the_old_throwaway_container() {
+fn run_rm_falls_back_to_the_old_throwaway_container() {
     let out = stdout_of(gpubox().args([
         "--gfx-override",
         "cpu",
         "--backend",
         "docker",
-        "enter",
+        "run",
         "--rm",
         "--dry-run",
     ]));
@@ -56,13 +56,13 @@ fn enter_rm_falls_back_to_the_old_throwaway_container() {
 }
 
 #[test]
-fn enter_name_uses_that_name_instead_of_the_stack() {
+fn run_name_uses_that_name_instead_of_the_default() {
     let out = stdout_of(gpubox().args([
         "--gfx-override",
         "cpu",
         "--backend",
         "docker",
-        "enter",
+        "run",
         "--name",
         "ml",
         "--dry-run",
@@ -78,7 +78,7 @@ fn name_and_rm_together_is_rejected() {
             "cpu",
             "--backend",
             "docker",
-            "enter",
+            "run",
             "--name",
             "ml",
             "--rm",
@@ -92,34 +92,22 @@ fn name_and_rm_together_is_rejected() {
 }
 
 #[test]
-fn rm_with_no_name_defaults_to_the_stack_container() {
-    let out = stdout_of(gpubox().args([
-        "--gfx-override",
-        "cpu",
-        "--backend",
-        "docker",
-        "--dry-run",
-        "rm",
-    ]));
-    assert!(out.contains("docker rm -f gpubox-cpu"));
+fn rm_with_no_name_defaults_to_the_gpubox_container() {
+    let out = stdout_of(gpubox().args(["--backend", "docker", "--dry-run", "rm"]));
+    assert!(out.contains("docker rm -f gpubox"));
+    // Exactly `gpubox`, not e.g. `gpubox-cpu` - the default no longer
+    // depends on the resolved stack, so this must never probe hardware.
+    assert!(out.trim().ends_with("gpubox"));
 }
 
 #[test]
 fn rm_with_explicit_name_uses_it() {
-    let out = stdout_of(gpubox().args([
-        "--gfx-override",
-        "cpu",
-        "--backend",
-        "docker",
-        "--dry-run",
-        "rm",
-        "ml",
-    ]));
+    let out = stdout_of(gpubox().args(["--backend", "docker", "--dry-run", "rm", "ml"]));
     assert!(out.contains("docker rm -f gpubox-ml"));
 }
 
 #[test]
-fn run_is_persistent_by_default_too() {
+fn run_with_a_trailing_command_is_non_interactive_and_persistent_too() {
     let out = stdout_of(gpubox().args([
         "--gfx-override",
         "cpu",
@@ -131,20 +119,20 @@ fn run_is_persistent_by_default_too() {
         "python",
         "train.py",
     ]));
-    assert!(out.contains("container: gpubox-cpu"));
+    assert!(out.contains("container: gpubox "));
     assert!(out.contains("python train.py"));
 }
 
 #[test]
 fn backends_with_no_persistence_story_silently_use_the_native_ephemeral_path() {
-    // Seatbelt has no container to persist - `enter` (no explicit --name)
+    // Seatbelt has no container to persist - `run` (no explicit --name)
     // must fall through to the old native path without erroring.
     let out = stdout_of(gpubox().args([
         "--gfx-override",
         "cpu",
         "--backend",
         "seatbelt",
-        "enter",
+        "run",
         "--dry-run",
     ]));
     assert!(out.contains("sandbox-exec"));
@@ -158,7 +146,7 @@ fn explicit_name_on_an_unsupported_backend_is_an_error() {
             "cpu",
             "--backend",
             "seatbelt",
-            "enter",
+            "run",
             "--name",
             "ml",
             "--dry-run",

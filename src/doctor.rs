@@ -80,7 +80,7 @@ pub fn report(overrides: &Overrides) -> Result<String> {
             out,
             "Container         : {} (persistent by default; override with --name, or use \
              --rm for a throwaway one)",
-            crate::container::container_name(&plan.resolved.stack)
+            crate::container::DEFAULT_CONTAINER_NAME
         );
     }
 
@@ -143,14 +143,13 @@ pub fn report(overrides: &Overrides) -> Result<String> {
     );
     let _ = writeln!(
         out,
-        "  --name <name>          [enter/run] use this container name instead of the default \
-         (`{}`)",
-        plan.resolved.stack
+        "  --name <name>          [run] use this container name instead of the default (`{}`)",
+        crate::container::DEFAULT_CONTAINER_NAME
     );
     let _ = writeln!(
         out,
-        "  --rm                   [enter/run] use a throwaway container for this run instead \
-         of the persistent default"
+        "  --rm                   [run] use a throwaway container for this run instead of the \
+         persistent default"
     );
     let _ = writeln!(
         out,

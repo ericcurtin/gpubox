@@ -17,15 +17,14 @@ pub struct Overrides {
     /// host, e.g. `sm_86`, `gfx1100`, `arc`, `apple`, `vulkan`, `cpu`.
     pub gfx_override: Option<String>,
     /// Select a specific detected GPU on a multi-GPU/hybrid host, by
-    /// 0-based index (`--gpu 1`) or coarse vendor name (`--gpu nvidia`,
-    /// `gpubox enter nvidia`). `None` keeps the default
-    /// [`probe::pick_primary`] behavior.
+    /// 0-based index (`--gpu 1`) or coarse vendor name (`--gpu nvidia`).
+    /// `None` keeps the default [`probe::pick_primary`] behavior.
     pub gpu: Option<String>,
-    /// Give the container a persistent name (`--name ml`) instead of the
-    /// default (the resolved stack name, e.g. `cuda`/`rocm`/`vulkan`):
-    /// either way, the container is created once and reattached on
-    /// subsequent `enter`/`run` invocations instead of being torn down.
-    /// See [`crate::container`].
+    /// Give the container a name (`--name ml`) instead of the default
+    /// (`container::DEFAULT_CONTAINER_NAME`, `"gpubox"`, shared across
+    /// every stack/hardware config): either way, the container is created
+    /// once and reattached on subsequent `gpubox run` invocations instead
+    /// of being torn down. See [`crate::container`].
     pub name: Option<String>,
     /// Use a throwaway `--rm` container for this invocation instead of a
     /// persistent one (the pre-persistence default). Mutually exclusive

@@ -2,7 +2,7 @@
 //! top of a base image (the Vulkan/CPU fallback's `mesa-vulkan-drivers`
 //! et al. - see `packages` in `data/quirks.toml`).
 //!
-//! Without this, every single `gpubox enter`/`gpubox run` on unrecognized
+//! Without this, every single `gpubox run` on unrecognized
 //! hardware re-runs `apt-get install` inside the wrapper script
 //! (`backend::linux`) before anything else can happen: a network hit and
 //! a real wait, every launch, purely to reinstall the exact same
