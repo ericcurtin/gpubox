@@ -4,7 +4,7 @@ title: "Introducing gpubox: a GPU-aware, distrobox-style container launcher"
 date: 2026-07-15
 ---
 
-# Introducing gpubox: a GPU-aware, distrobox-style container launcher
+# Introducing gpubox: a GPU-aware, container launcher
 
 *Published 2026-07-15*
 
@@ -31,9 +31,7 @@ requires, no manually figuring out which `--device` flags your card
 needs, no picking a base image by hand. gpubox looks at what hardware
 you have, decides what container image and runtime flags make sense, and
 drops you into a shell with your home directory, dotfiles, and current
-project mounted in - the same experience [distrobox](https://distrobox.it/)
-gives you for regular Linux toolboxes, extended to cover GPUs and to work
-on macOS and Windows too.
+project mounted in.
 
 It's a brand new project as of this post - the design is settled and the
 core pipeline works end-to-end, but the community data files (see below)
@@ -53,10 +51,6 @@ tend to conflate:
 2. **How do I get the device into the container?** Device nodes,
    `--gpus`, CDI specs, `nvidia-container-toolkit` hooks - the right
    answer depends on your container engine version and your distro.
-3. **How do I make the container feel like part of my system?** Home
-   directory, dotfiles, current project, X11/Wayland sockets, matching
-   UID - distrobox solved this for CPU toolboxes years ago, but nothing
-   quite does it for GPU-specific containers out of the box.
 
 gpubox is a straight-line pipeline through all three, plus a fourth
 problem that turns out to matter just as much: **explaining itself**. GPU
@@ -152,10 +146,10 @@ whatever the host kernel driver actually is.
 
 ### 4. Host integration - making it feel native
 
-This is the distrobox part: gpubox mounts `$HOME` (dotfiles included,
-since they live under `$HOME` anyway) and the current working directory,
-maps your UID in (`--userns=keep-id` on Podman, `-u uid:gid` on Docker),
-forwards X11/Wayland sockets so GUI and OpenGL apps work, and sets a
+gpubox mounts `$HOME` (dotfiles included, since they live under `$HOME`
+anyway) and the current working directory, maps your UID in
+(`--userns=keep-id` on Podman, `-u uid:gid` on Docker), forwards
+X11/Wayland sockets so GUI and OpenGL apps work, and sets a
 `GPUBOX_STACK` environment variable so shells can render a prompt marker
 like `(gpubox:rocm)` - so you always know which stack you're in without
 having to think about it.
