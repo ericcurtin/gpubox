@@ -16,6 +16,20 @@ pub struct Overrides {
     /// Force a specific hardware classification instead of probing the
     /// host, e.g. `sm_86`, `gfx1100`, `arc`, `apple`, `vulkan`, `cpu`.
     pub gfx_override: Option<String>,
+    /// Select a specific detected GPU on a multi-GPU/hybrid host, by
+    /// 0-based index (`--gpu 1`) or coarse vendor name (`--gpu nvidia`,
+    /// `gpubox enter nvidia`). `None` keeps the default
+    /// [`probe::pick_primary`] behavior.
+    pub gpu: Option<String>,
+    /// Give the container a persistent name (`--name ml`): the container
+    /// is created once and reattached on subsequent `enter`/`run`
+    /// invocations instead of being torn down with `--rm`. See
+    /// [`crate::container`].
+    pub name: Option<String>,
+    /// Don't mount `$HOME` into the container at all.
+    pub no_home: bool,
+    /// Mount `$HOME` read-only instead of read-write.
+    pub read_only_home: bool,
 }
 
 /// Parse a `--gfx-override` value into a [`GpuClass`]. Prefixes match the
@@ -45,6 +59,9 @@ pub fn parse_gfx_override(value: &str) -> Result<GpuClass> {
 
 pub struct Plan {
     pub class: GpuClass,
+    /// Every GPU the probe detected (before `--gpu`/primary selection),
+    /// for `gpubox doctor` to surface on multi-GPU/hybrid hosts.
+    pub devices: Vec<probe::GpuDevice>,
     pub resolved: ResolvedStack,
     pub engine: Engine,
     pub spec: LaunchSpec,
@@ -52,16 +69,26 @@ pub struct Plan {
     pub device_reason: Option<String>,
 }
 
-/// Build the full launch plan: probe (or apply `--gfx-override`), resolve
-/// the stack, plan device injection, plan host integration, and merge it
-/// all into a [`LaunchSpec`] plus the [`Engine`] that will run it.
+/// Build the full launch plan: probe (or apply `--gfx-override`/`--gpu`),
+/// resolve the stack, plan device injection, plan host integration, and
+/// merge it all into a [`LaunchSpec`] plus the [`Engine`] that will run
+/// it.
 pub fn plan(overrides: &Overrides, command: Vec<String>, interactive: bool) -> Result<Plan> {
+    if overrides.no_home && overrides.read_only_home {
+        bail!("--no-home and --read-only-home are mutually exclusive");
+    }
+
+    let devices = probe::probe_host();
     let class = match &overrides.gfx_override {
         Some(value) => parse_gfx_override(value)?,
-        None => {
-            let devices = probe::probe_host();
-            probe::pick_primary(&devices).class.clone()
-        }
+        None => match &overrides.gpu {
+            // Multi-GPU/hybrid hosts (e.g. an Intel iGPU alongside an
+            // NVIDIA dGPU) shouldn't have their hardware silently chosen
+            // for them - `--gpu <index|vendor>` lets the user pick
+            // explicitly instead of trusting `pick_primary`'s ranking.
+            Some(selector) => probe::select(&devices, selector)?.class,
+            None => probe::pick_primary(&devices).class.clone(),
+        },
     };
 
     let resolved = stack::resolve(&class)?;
@@ -70,17 +97,34 @@ pub fn plan(overrides: &Overrides, command: Vec<String>, interactive: bool) -> R
         Some(name) => {
             Engine::parse(name).ok_or_else(|| anyhow::anyhow!("unrecognized --backend `{name}`"))?
         }
-        None => Engine::default_for_platform(),
+        None => Engine::default_for_platform_and_stack(&resolved.stack),
     };
 
-    let image = overrides
-        .image
-        .clone()
-        .unwrap_or_else(|| resolved.image.clone());
+    // `resolved.image` is always a Linux image reference (the vendor's
+    // published CUDA/ROCm/oneAPI container, or the Ubuntu-based Vulkan/CPU
+    // fallback) - it cannot run under `Engine::WindowsContainer`, which
+    // needs a Windows Server Core/Nano Server-based image instead. Prefer
+    // `resolved.windows_image` in that case; `gpubox doctor` warns when
+    // neither it nor `--image` is set (see `doctor::report`).
+    let image = overrides.image.clone().unwrap_or_else(|| {
+        if engine == Engine::WindowsContainer {
+            resolved
+                .windows_image
+                .clone()
+                .unwrap_or_else(|| resolved.image.clone())
+        } else {
+            resolved.image.clone()
+        }
+    });
 
     let (device_args, device_reason, library_mounts) = device_injection(&class);
 
-    let integration = mounts::plan(engine.name(), &resolved.stack);
+    let home_mode = match (overrides.no_home, overrides.read_only_home) {
+        (true, _) => mounts::HomeMode::None,
+        (false, true) => mounts::HomeMode::ReadOnly,
+        (false, false) => mounts::HomeMode::ReadWrite,
+    };
+    let integration = mounts::plan_with_home_mode(engine.name(), &resolved.stack, home_mode);
 
     let mut env: Vec<(String, String)> = resolved.env.clone().into_iter().collect();
     env.extend(integration.env.clone());
@@ -103,6 +147,7 @@ pub fn plan(overrides: &Overrides, command: Vec<String>, interactive: bool) -> R
 
     Ok(Plan {
         class,
+        devices,
         resolved,
         engine,
         spec,
@@ -183,6 +228,7 @@ mod tests {
             backend: None,
             image: None,
             gfx_override: Some("gfx1100".to_string()),
+            ..Default::default()
         };
         let plan = plan(&overrides, vec![], true).unwrap();
         assert_eq!(plan.resolved.stack, "rocm");
@@ -195,9 +241,37 @@ mod tests {
             backend: None,
             image: Some("mycorp/custom:latest".to_string()),
             gfx_override: Some("cpu".to_string()),
+            ..Default::default()
         };
         let plan = plan(&overrides, vec![], true).unwrap();
         assert_eq!(plan.spec.image, "mycorp/custom:latest");
+    }
+
+    #[test]
+    fn windows_container_backend_prefers_windows_image_over_linux_image() {
+        let overrides = Overrides {
+            backend: Some("windows-container".to_string()),
+            gfx_override: Some("sm_86".to_string()),
+            ..Default::default()
+        };
+        let plan = plan(&overrides, vec![], true).unwrap();
+        assert_eq!(plan.resolved.image, "nvidia/cuda:12.9.2-devel-ubuntu24.04");
+        assert_eq!(
+            plan.spec.image,
+            "mcr.microsoft.com/windows/servercore:ltsc2022"
+        );
+    }
+
+    #[test]
+    fn windows_container_backend_honors_explicit_image_override() {
+        let overrides = Overrides {
+            backend: Some("windows-container".to_string()),
+            image: Some("myregistry/my-cuda-windows:latest".to_string()),
+            gfx_override: Some("sm_86".to_string()),
+            ..Default::default()
+        };
+        let plan = plan(&overrides, vec![], true).unwrap();
+        assert_eq!(plan.spec.image, "myregistry/my-cuda-windows:latest");
     }
 
     #[test]
@@ -206,6 +280,7 @@ mod tests {
             backend: Some("bogus-engine".to_string()),
             image: None,
             gfx_override: Some("cpu".to_string()),
+            ..Default::default()
         };
         assert!(plan(&overrides, vec![], true).is_err());
     }

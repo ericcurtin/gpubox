@@ -1,10 +1,13 @@
-//! Command-line interface: `enter`, `run`, `generate`, `doctor`.
+//! Command-line interface: `enter`, `run`, `rm`, `generate`, `doctor`,
+//! `completions`, `man`.
 
 use crate::backend::{self, Invocation};
+use crate::cache;
+use crate::container;
 use crate::generate::{self, Format};
 use crate::launch::{self, Overrides, Plan};
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -16,7 +19,7 @@ use std::path::PathBuf;
 )]
 pub struct Cli {
     /// Force a specific backend instead of the platform default (docker,
-    /// podman, seatbelt, windows-sandbox).
+    /// podman, seatbelt, windows-sandbox, windows-container).
     #[arg(long, global = true)]
     backend: Option<String>,
 
@@ -30,6 +33,22 @@ pub struct Cli {
     #[arg(long = "gfx-override", global = true)]
     gfx_override: Option<String>,
 
+    /// Pick a specific GPU on a multi-GPU/hybrid host, either by 0-based
+    /// index (`--gpu 1`) or coarse vendor name (`--gpu nvidia`). Also
+    /// available as a positional argument on `enter`/`run`, e.g.
+    /// `gpubox enter nvidia`.
+    #[arg(long, global = true)]
+    gpu: Option<String>,
+
+    /// Don't mount $HOME into the sandbox at all. See the threat-model
+    /// note on `mounts::HomeMode`.
+    #[arg(long, global = true, conflicts_with = "read_only_home")]
+    no_home: bool,
+
+    /// Mount $HOME read-only instead of read-write.
+    #[arg(long, global = true)]
+    read_only_home: bool,
+
     /// Print the command(s) that would be run instead of running them.
     #[arg(long, global = true)]
     dry_run: bool,
@@ -41,17 +60,38 @@ pub struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Enter an interactive shell inside the auto-detected GPU sandbox.
-    Enter,
+    Enter {
+        /// Select a GPU by vendor name (nvidia, amd, intel, apple,
+        /// vulkan, cpu) or index, same as `--gpu`. A positional
+        /// convenience for the common case, e.g. `gpubox enter nvidia`.
+        gpu: Option<String>,
+        /// Give the container a persistent name instead of the default
+        /// throwaway `--rm` container: created once, reattached on every
+        /// subsequent `enter`/`run` with the same name. Use `gpubox rm
+        /// <name>` to remove it and start fresh. Docker/Podman only.
+        #[arg(long)]
+        name: Option<String>,
+    },
     /// Run a single command inside the sandbox, non-interactively.
     Run {
+        /// See `enter`'s `--name`.
+        #[arg(long)]
+        name: Option<String>,
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
     },
+    /// Remove a persistent named container (see `enter --name`), so the
+    /// next `enter --name <name>` starts completely fresh.
+    Rm {
+        /// The name given to `enter --name`/`run --name`.
+        name: String,
+    },
     /// Emit the equivalent Dockerfile / Compose / Quadlet / Seatbelt /
-    /// `.wsb` config instead of launching anything.
+    /// `.wsb` / devcontainer.json config instead of launching anything.
     Generate {
-        /// dockerfile, compose, quadlet, seatbelt, or windows-sandbox.
-        /// Defaults to whatever's idiomatic for the host platform.
+        /// dockerfile, compose, quadlet, seatbelt, windows-sandbox, or
+        /// devcontainer. Defaults to whatever's idiomatic for the host
+        /// platform.
         #[arg(long)]
         format: Option<String>,
         /// Write to this path instead of stdout.
@@ -59,39 +99,84 @@ enum Command {
         output: Option<PathBuf>,
     },
     /// Print detected hardware, chosen stack, and how to override it.
-    Doctor,
+    Doctor {
+        /// Structured output for scripting, instead of the human-readable
+        /// report.
+        #[arg(long, conflicts_with = "report")]
+        json: bool,
+        /// Print an anonymized hardware-probe snapshot (no paths, no
+        /// usernames) suitable for pasting into a bug report.
+        #[arg(long)]
+        report: bool,
+    },
+    /// Print a shell completion script for the given shell.
+    Completions { shell: clap_complete::Shell },
+    /// Print a man page (troff) for gpubox.
+    Man,
 }
 
 impl Cli {
-    fn overrides(&self) -> Overrides {
+    fn overrides(&self, positional_gpu: Option<&str>) -> Overrides {
         Overrides {
             backend: self.backend.clone(),
             image: self.image.clone(),
             gfx_override: self.gfx_override.clone(),
+            gpu: positional_gpu
+                .map(str::to_string)
+                .or_else(|| self.gpu.clone()),
+            name: None,
+            no_home: self.no_home,
+            read_only_home: self.read_only_home,
         }
     }
 }
 
 pub fn run() -> Result<i32> {
     let cli = Cli::parse();
-    let overrides = cli.overrides();
 
     match &cli.command {
-        Command::Enter => execute(&overrides, Vec::new(), true, cli.dry_run),
-        Command::Run { command } => {
+        Command::Enter { gpu, name } => {
+            let mut overrides = cli.overrides(gpu.as_deref());
+            overrides.name = name.clone();
+            execute(&overrides, Vec::new(), true, cli.dry_run)
+        }
+        Command::Run { name, command } => {
             if command.is_empty() {
                 anyhow::bail!(
                     "`gpubox run` requires a command, e.g. `gpubox run -- python train.py`"
                 );
             }
+            let mut overrides = cli.overrides(None);
+            overrides.name = name.clone();
             execute(&overrides, command.clone(), false, cli.dry_run)
         }
+        Command::Rm { name } => rm_cmd(&cli, name),
         Command::Generate { format, output } => {
+            let overrides = cli.overrides(None);
             generate_cmd(&overrides, format.as_deref(), output.as_deref())?;
             Ok(0)
         }
-        Command::Doctor => {
-            print!("{}", crate::doctor::report(&overrides)?);
+        Command::Doctor { json, report } => {
+            let overrides = cli.overrides(None);
+            if *report {
+                println!("{}", crate::doctor::probe_snapshot_json()?);
+            } else if *json {
+                println!("{}", crate::doctor::report_json(&overrides)?);
+            } else {
+                print!("{}", crate::doctor::report(&overrides)?);
+            }
+            Ok(0)
+        }
+        Command::Completions { shell } => {
+            let mut cmd = Cli::command();
+            let name = cmd.get_name().to_string();
+            clap_complete::generate(*shell, &mut cmd, name, &mut std::io::stdout());
+            Ok(0)
+        }
+        Command::Man => {
+            let cmd = Cli::command();
+            let man = clap_mangen::Man::new(cmd);
+            man.render(&mut std::io::stdout())?;
             Ok(0)
         }
     }
@@ -103,7 +188,25 @@ fn execute(
     interactive: bool,
     dry_run: bool,
 ) -> Result<i32> {
-    let plan: Plan = launch::plan(overrides, command, interactive)?;
+    let mut plan: Plan = launch::plan(overrides, command, interactive)?;
+
+    if let Some(name) = overrides.name.clone() {
+        let engine = plan.engine.as_container_engine().ok_or_else(|| {
+            anyhow::anyhow!(
+                "--name is only supported with the docker/podman backends (resolved backend: \
+                 `{}`)",
+                plan.engine
+            )
+        })?;
+        return execute_named(engine, &mut plan, &name, dry_run);
+    }
+
+    if !dry_run {
+        if let Some(engine) = plan.engine.as_container_engine() {
+            cache::ensure_cached_image(engine.program(), &plan.resolved, &mut plan.spec)?;
+        }
+    }
+
     let invocation = backend::build_invocation(plan.engine, &plan.spec)?;
 
     if dry_run {
@@ -113,12 +216,94 @@ fn execute(
 
     backend::ensure_available(plan.engine)?;
     write_generated_files(&invocation)?;
+    run_invocation(&invocation)
+}
 
+/// The `--name` path: create-or-reattach a persistent container, then exec
+/// into it. See `container` module docs for the full rationale.
+fn execute_named(
+    engine: backend::linux::ContainerEngine,
+    plan: &mut Plan,
+    name: &str,
+    dry_run: bool,
+) -> Result<i32> {
+    let full_name = container::container_name(name);
+    let engine_program = engine.program();
+
+    if !dry_run {
+        backend::ensure_available(plan.engine)?;
+        cache::ensure_cached_image(engine_program, &plan.resolved, &mut plan.spec)?;
+    }
+
+    let state = container::inspect(engine_program, &full_name);
+
+    let mut setup: Vec<Invocation> = Vec::new();
+    match state {
+        container::ContainerState::Missing => {
+            setup.push(container::create_invocation(engine, &plan.spec, &full_name));
+        }
+        container::ContainerState::Stopped => {
+            setup.push(container::start_invocation(engine, &full_name));
+        }
+        container::ContainerState::Running => {}
+    }
+    let exec_invocation = container::exec_invocation(engine, &plan.spec, &full_name);
+
+    if dry_run {
+        println!(
+            "# stack: {}  image: {}  backend: {}  container: {full_name} (state: {state:?})",
+            plan.resolved.stack, plan.spec.image, plan.engine
+        );
+        for inv in &setup {
+            print_invocation_line(inv);
+        }
+        print_invocation_line(&exec_invocation);
+        return Ok(0);
+    }
+
+    for inv in &setup {
+        let status = std::process::Command::new(&inv.program)
+            .args(&inv.args)
+            .status()
+            .with_context(|| format!("failed to execute `{}`", inv.program))?;
+        if !status.success() {
+            anyhow::bail!(
+                "`{} {}` failed while preparing container `{full_name}`",
+                inv.program,
+                inv.args.join(" ")
+            );
+        }
+    }
+
+    run_invocation(&exec_invocation)
+}
+
+fn rm_cmd(cli: &Cli, name: &str) -> Result<i32> {
+    let engine = match &cli.backend {
+        Some(name) => backend::Engine::parse(name)
+            .ok_or_else(|| anyhow::anyhow!("unrecognized --backend `{name}`"))?,
+        None => backend::Engine::default_for_platform(),
+    };
+    let engine = engine.as_container_engine().ok_or_else(|| {
+        anyhow::anyhow!("`gpubox rm` is only supported with the docker/podman backends")
+    })?;
+    let full_name = container::container_name(name);
+
+    if cli.dry_run {
+        println!("{} rm -f {full_name}", engine.program());
+        return Ok(0);
+    }
+
+    container::remove(engine.program(), &full_name)?;
+    println!("removed {full_name}");
+    Ok(0)
+}
+
+fn run_invocation(invocation: &Invocation) -> Result<i32> {
     let status = std::process::Command::new(&invocation.program)
         .args(&invocation.args)
         .status()
         .with_context(|| format!("failed to execute `{}`", invocation.program))?;
-
     Ok(status.code().unwrap_or(1))
 }
 
@@ -127,14 +312,18 @@ fn print_dry_run(plan: &Plan, invocation: &Invocation) {
         "# stack: {}  image: {}  backend: {}",
         plan.resolved.stack, plan.spec.image, plan.engine
     );
+    print_invocation_line(invocation);
+    for (path, _content) in &invocation.generated_files {
+        println!("# (would write {} )", path.display());
+    }
+}
+
+fn print_invocation_line(invocation: &Invocation) {
     print!("{}", invocation.program);
     for arg in &invocation.args {
         print!(" {}", shell_quote(arg));
     }
     println!();
-    for (path, _content) in &invocation.generated_files {
-        println!("# (would write {} )", path.display());
-    }
 }
 
 fn shell_quote(arg: &str) -> String {

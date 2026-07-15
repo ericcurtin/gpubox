@@ -117,6 +117,35 @@ pub struct HostIntegration {
     pub workdir: Option<PathBuf>,
 }
 
+/// How (or whether) `$HOME` gets bound into the container.
+///
+/// Mounting `$HOME` read-write into a container that runs a root wrapper
+/// (see `backend::linux::wrapper_script`) before dropping privileges is a
+/// meaningful part of gpubox's threat model: for the brief window before
+/// `setpriv` hands off to the unprivileged user, the process inside the
+/// container *is* root and can read or write anything under the mounted
+/// `$HOME`, regardless of host-side file permissions - a compromised or
+/// malicious `packages`/command running in that window has full access to
+/// dotfiles, SSH keys, browser profiles, etc. `--no-home` and
+/// `--read-only-home` exist for users who want the "feels like home"
+/// convenience of the rest of gpubox's host integration (CWD mount, GUI
+/// sockets, identity forwarding) without handing over write access to the
+/// entire home directory to every sandbox.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HomeMode {
+    /// Mount `$HOME` read-write (the default - "feels like home").
+    #[default]
+    ReadWrite,
+    /// Mount `$HOME` read-only: dotfiles and tools are visible, but
+    /// nothing running in the sandbox (including the root setup wrapper)
+    /// can modify anything under it.
+    ReadOnly,
+    /// Don't mount `$HOME` at all. The container gets its own image-
+    /// default home directory; only the CWD bind mount and GUI sockets
+    /// are shared with the host.
+    None,
+}
+
 fn home_dir() -> Option<PathBuf> {
     if cfg!(windows) {
         env::var_os("USERPROFILE").map(PathBuf::from)
@@ -129,14 +158,22 @@ fn home_dir() -> Option<PathBuf> {
 /// ("docker" or "podman") and resolved stack tag (used only for the prompt
 /// marker).
 pub fn plan(engine: &str, stack: &str) -> HostIntegration {
+    plan_with_home_mode(engine, stack, HomeMode::ReadWrite)
+}
+
+/// Same as [`plan`], but with control over whether/how `$HOME` is bound
+/// into the container (`--no-home` / `--read-only-home`; see [`HomeMode`]).
+pub fn plan_with_home_mode(engine: &str, stack: &str, home_mode: HomeMode) -> HostIntegration {
     let mut integration = HostIntegration::default();
 
-    if let Some(home) = home_dir() {
-        integration.mounts.push(BindMount {
-            container: home.clone(),
-            host: home,
-            read_only: false,
-        });
+    if home_mode != HomeMode::None {
+        if let Some(home) = home_dir() {
+            integration.mounts.push(BindMount {
+                container: home.clone(),
+                host: home,
+                read_only: home_mode == HomeMode::ReadOnly,
+            });
+        }
     }
 
     if let Ok(cwd) = env::current_dir() {
@@ -175,9 +212,15 @@ pub fn plan(engine: &str, stack: &str) -> HostIntegration {
             // belt-and-braces alongside backend::linux's passwd-rewriting
             // wrapper, since env vars are what most tools actually read.
             let identity = current_identity();
-            integration
-                .env
-                .push(("HOME".to_string(), identity.home.display().to_string()));
+            // Only force $HOME to the host path when the host home
+            // directory is actually mounted there - with `--no-home`
+            // there's nothing at that path inside the container, so let
+            // the image's own default $HOME stand.
+            if home_mode != HomeMode::None {
+                integration
+                    .env
+                    .push(("HOME".to_string(), identity.home.display().to_string()));
+            }
             integration
                 .env
                 .push(("USER".to_string(), identity.username.clone()));
@@ -278,5 +321,48 @@ mod tests {
         // produce a non-empty username to build a passwd line from.
         assert!(!identity.username.is_empty());
         assert!(!identity.groupname.is_empty());
+    }
+
+    #[test]
+    fn no_home_mode_skips_home_mount_and_home_env() {
+        let integration = plan_with_home_mode("docker", "cuda", HomeMode::None);
+        let Some(home) = home_dir() else {
+            return; // nothing to assert on a host with no $HOME
+        };
+        assert!(!integration.mounts.iter().any(|m| m.host == home));
+        assert!(!integration.env.iter().any(|(k, _)| k == "HOME"));
+        // CWD must still be mounted - only $HOME is affected.
+        assert!(integration.mounts.iter().any(|m| m.host == m.container));
+        // Identity (uid mapping) is unaffected by home mode.
+        assert!(integration.env.iter().any(|(k, _)| k == "USER"));
+    }
+
+    #[test]
+    fn read_only_home_mode_mounts_home_read_only() {
+        let integration = plan_with_home_mode("docker", "cuda", HomeMode::ReadOnly);
+        let Some(home) = home_dir() else {
+            return;
+        };
+        let home_mount = integration
+            .mounts
+            .iter()
+            .find(|m| m.host == home)
+            .expect("home must still be mounted, just read-only");
+        assert!(home_mount.read_only);
+        assert!(integration.env.iter().any(|(k, _)| k == "HOME"));
+    }
+
+    #[test]
+    fn default_plan_mounts_home_read_write() {
+        let integration = plan("docker", "cuda");
+        let Some(home) = home_dir() else {
+            return;
+        };
+        let home_mount = integration
+            .mounts
+            .iter()
+            .find(|m| m.host == home)
+            .expect("home must be mounted by default");
+        assert!(!home_mount.read_only);
     }
 }

@@ -14,6 +14,7 @@
 pub mod linux;
 pub mod macos;
 pub mod windows;
+pub mod windows_container;
 
 use crate::mounts::BindMount;
 use anyhow::{bail, Result};
@@ -60,6 +61,11 @@ pub enum Engine {
     Podman,
     Seatbelt,
     WindowsSandbox,
+    /// Process-isolated Windows container with GPU compute passthrough -
+    /// the CUDA-capable alternative to Windows Sandbox's `<VGpu>`, which
+    /// only provides WDDM/DirectX paravirtualization. See
+    /// `backend::windows_container` for the full rationale.
+    WindowsContainer,
 }
 
 impl Engine {
@@ -69,6 +75,7 @@ impl Engine {
             Engine::Podman => "podman",
             Engine::Seatbelt => "seatbelt",
             Engine::WindowsSandbox => "windows-sandbox",
+            Engine::WindowsContainer => "windows-container",
         }
     }
 
@@ -78,12 +85,21 @@ impl Engine {
             "podman" => Some(Engine::Podman),
             "seatbelt" | "sandbox-exec" => Some(Engine::Seatbelt),
             "windows-sandbox" | "wsb" => Some(Engine::WindowsSandbox),
+            "windows-container" | "wincontainer" | "win-container" => {
+                Some(Engine::WindowsContainer)
+            }
             _ => None,
         }
     }
 
     /// The default engine for the current host platform. Linux defaults to
-    /// Docker (falling back to Podman if Docker isn't installed).
+    /// Docker (falling back to Podman if Docker isn't installed). Windows
+    /// defaults to Windows Sandbox, since it works out of the box with no
+    /// setup and needs no GPU for most uses; callers that know they need
+    /// real GPU compute (CUDA/ROCm/oneAPI, not just CPU or Vulkan/DirectX
+    /// rendering) should prefer [`Engine::default_for_platform_and_class`]
+    /// instead, which switches to [`Engine::WindowsContainer`] in that
+    /// case when it's available.
     pub fn default_for_platform() -> Engine {
         if cfg!(target_os = "macos") {
             Engine::Seatbelt
@@ -94,6 +110,22 @@ impl Engine {
         } else {
             Engine::Docker
         }
+    }
+
+    /// Like [`Engine::default_for_platform`], but on Windows additionally
+    /// prefers [`Engine::WindowsContainer`] over Windows Sandbox when the
+    /// detected stack actually needs vendor GPU compute (`cuda`/`rocm`/
+    /// `oneapi`) - Windows Sandbox's `<VGpu>` cannot run those workloads
+    /// at all, so silently picking it there would be a launch that looks
+    /// like it worked but where `nvidia-smi`/CUDA calls simply fail.
+    pub fn default_for_platform_and_stack(stack: &str) -> Engine {
+        if cfg!(target_os = "windows") {
+            let needs_gpu_compute = matches!(stack, "cuda" | "rocm" | "oneapi");
+            if needs_gpu_compute && Engine::WindowsContainer.is_available() {
+                return Engine::WindowsContainer;
+            }
+        }
+        Engine::default_for_platform()
     }
 
     /// Whether the underlying tool for this engine is installed on PATH
@@ -107,16 +139,39 @@ impl Engine {
                 which("WindowsSandbox.exe")
                     || PathBuf::from(r"C:\Windows\System32\WindowsSandbox.exe").exists()
             }
+            // Process-isolated Windows containers are driven by the same
+            // `docker` CLI as Linux; whether the local Docker daemon is
+            // actually configured for Windows containers (vs. Linux
+            // containers via WSL2) can't be told from PATH alone, so
+            // `ensure_available` doubles as the point where a misconfigured
+            // daemon fails loudly instead of silently.
+            Engine::WindowsContainer => which("docker"),
         }
     }
 
-    pub fn all() -> [Engine; 4] {
+    pub fn all() -> [Engine; 5] {
         [
             Engine::Docker,
             Engine::Podman,
             Engine::Seatbelt,
             Engine::WindowsSandbox,
+            Engine::WindowsContainer,
         ]
+    }
+
+    /// If this engine is one of the Linux docker/podman engines, the
+    /// corresponding [`linux::ContainerEngine`] - used by
+    /// [`crate::container`] and [`crate::cache`], both of which only make
+    /// sense for a real, nameable, image-buildable container engine
+    /// (Seatbelt has no containers to persist or build images for;
+    /// Windows Sandbox always boots clean; Windows Containers use their
+    /// own separate, Windows-image-only invocation builder).
+    pub fn as_container_engine(self) -> Option<linux::ContainerEngine> {
+        match self {
+            Engine::Docker => Some(linux::ContainerEngine::Docker),
+            Engine::Podman => Some(linux::ContainerEngine::Podman),
+            _ => None,
+        }
     }
 }
 
@@ -139,6 +194,7 @@ pub fn build_invocation(engine: Engine, spec: &LaunchSpec) -> Result<Invocation>
         )),
         Engine::Seatbelt => macos::build_invocation(spec),
         Engine::WindowsSandbox => windows::build_invocation(spec),
+        Engine::WindowsContainer => windows_container::build_invocation(spec),
     }
 }
 
@@ -179,7 +235,7 @@ fn platform_engines_hint() -> &'static str {
     } else if cfg!(target_os = "macos") {
         "seatbelt"
     } else if cfg!(target_os = "windows") {
-        "windows-sandbox"
+        "windows-sandbox, windows-container"
     } else {
         "none supported on this platform"
     }

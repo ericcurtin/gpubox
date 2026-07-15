@@ -71,14 +71,83 @@ Five stages, each its own module:
 
 | Platform | Backend                          | Notes |
 |----------|-----------------------------------|-------|
-| Linux    | Docker (default) or Podman        | CDI / `--device` / `--gpus all` |
+| Linux    | Docker (default) or Podman        | CDI / `--device` / `--gpus all`. Podman's rootless mode is first-class here - no root required on the host (see `gpubox doctor`'s "Podman mode" line). |
 | macOS    | Seatbelt (`sandbox-exec`)          | No Linux kernel to pass a device through; the sandboxed process runs natively against the host's Metal stack |
-| Windows  | Windows Sandbox                   | Hyper-V-backed, non-Linux (unlike WSL2), with opt-in GPU passthrough via `<VGpu>Enable</VGpu>` |
+| Windows  | Windows Sandbox (default) or Windows Container | Windows Sandbox's `<VGpu>Enable</VGpu>` is WDDM/DirectX paravirtualization only - **not CUDA-capable**. For `cuda`/`rocm`/`oneapi` stacks, gpubox instead defaults to a **process-isolated Windows container** (`docker run --isolation process --device class/<GPU class GUID>`), which shares the host kernel directly so the host's real GPU driver (kernel-mode + userspace) is used as-is - CUDA-capable, still not a Linux VM (unlike WSL2). Needs a Windows-based `--image`; see `src/backend/windows_container.rs`. |
 
 `src/generate.rs` renders the same plan as an inspectable file instead of
 running anything: a Dockerfile, a Compose file, a Podman Quadlet unit,
-a Seatbelt `.sb` profile, or a Windows Sandbox `.wsb` config - so the
-"magic" is reproducible in CI or checked into a repo.
+a Seatbelt `.sb` profile, a Windows Sandbox `.wsb` config, or a VS Code
+`devcontainer.json` - so the "magic" is reproducible in CI, checked into a
+repo, or opened straight in Dev Containers/Codespaces.
+
+## Persistent named containers
+
+By default every `gpubox enter`/`gpubox run` is a throwaway `--rm`
+container: anything `apt install`ed inside it vanishes when the shell
+exits, and the Vulkan/CPU fallback's `mesa-vulkan-drivers` et al. get
+reinstalled on every single launch. `--name` opts into a long-lived
+container instead, the same model distrobox/toolbox use:
+
+```
+gpubox enter --name ml         # first run: creates it; every run after: reattaches
+gpubox run --name ml -- python train.py
+gpubox rm ml                   # delete it and start fresh next time
+```
+
+Separately, and regardless of `--name`: any image that needs extra apt
+packages layered on (the Vulkan/CPU fallback) is built and tagged
+**once**, locally, and reused - so even ephemeral `--rm` runs skip the
+`apt-get install` network hit and wait after the first launch. See
+`src/cache.rs`.
+
+## Multi-GPU and hybrid systems
+
+On a host with more than one GPU (a laptop with an Intel iGPU and an
+NVIDIA dGPU, or a workstation with mixed vendors), `gpubox doctor` lists
+every detected device, and `pick_primary`'s ranking (discrete NVIDIA >
+discrete AMD > Intel Arc/Xe > other iGPUs > Apple > Vulkan > none) is
+just the *default* - override it explicitly:
+
+```
+gpubox enter nvidia        # positional vendor selector
+gpubox --gpu 1 doctor      # 0-based index into the detected list
+gpubox --gpu amd run -- rocm-smi
+```
+
+## Other flags
+
+```
+--no-home            don't mount $HOME into the sandbox at all
+--read-only-home      mount $HOME read-only instead of read-write
+```
+
+Mounting `$HOME` read-write into a container that runs a root wrapper
+before dropping privileges (see `src/backend/linux.rs`) means that, for
+the brief window before the privilege drop, the process inside the
+container *is* root and can read or write anything under `$HOME`
+regardless of host file permissions. `--no-home`/`--read-only-home` exist
+for anyone who wants gpubox's CWD mount / GUI sockets / identity
+forwarding without handing over full write access to the home directory
+on every sandbox.
+
+## Diagnostics for scripts and bug reports
+
+```
+gpubox doctor --json      # the same report, structured, for scripting
+gpubox doctor --report    # an anonymized hardware-probe snapshot (no
+                           # paths, no usernames) to paste into a bug
+                           # report - and to grow the fixture corpus in
+                           # src/probe/*.rs's tests with real hardware
+```
+
+## Shell completions and man page
+
+```
+gpubox completions bash > /etc/bash_completion.d/gpubox
+gpubox completions zsh   > "${fpath[1]}/_gpubox"
+gpubox man > /usr/local/share/man/man1/gpubox.1
+```
 
 ### Default images (Linux)
 
@@ -99,17 +168,26 @@ any of them per-invocation with `--image`, or permanently by editing
 
 ```
 gpubox enter                     # interactive shell in the auto-detected sandbox
+gpubox enter --name ml           # persistent: reattaches on every later `enter --name ml`
 gpubox run -- python train.py    # non-interactive
+gpubox rm ml                     # delete a persistent named container
 gpubox generate --format compose -o compose.yaml
 gpubox doctor                    # explain what was detected and why
+gpubox doctor --json             # same, structured
+gpubox doctor --report           # anonymized probe snapshot for bug reports
+gpubox completions bash          # shell completion script
+gpubox man                       # man page (troff)
 ```
 
 Global overrides (work with every subcommand):
 
 ```
---backend <docker|podman|seatbelt|windows-sandbox>
+--backend <docker|podman|seatbelt|windows-sandbox|windows-container>
 --image <ref>
 --gfx-override <sm_86|gfx1100|arc|apple|vulkan|cpu>
+--gpu <index|vendor>       pick a specific GPU on a multi-GPU/hybrid host
+--no-home                 don't mount $HOME into the sandbox at all
+--read-only-home           mount $HOME read-only instead of read-write
 --dry-run
 ```
 
@@ -122,6 +200,13 @@ Two data files, both plain TOML, no code changes required:
 - `data/quirks.toml` - add or fix a stack/image/env mapping for an arch
   tag, e.g. "this gfx target needs `HSA_OVERRIDE_GFX_VERSION` set to
   work with ROCm".
+
+Both files are structurally validated by `cargo test` (see
+`tests/schema_validation.rs`, `stack::validate_quirks_db`, and
+`probe::validate_pci_ids_db`) - every vendor table's fallback rule,
+every device id's hex format, and every image reference is checked, so a
+PR that breaks one of these fails CI instead of shipping a broken
+fallback.
 
 ## Development
 

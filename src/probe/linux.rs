@@ -265,6 +265,43 @@ mod tests {
         assert!(devices.is_empty());
     }
 
+    /// A fixture-based test for the common "hybrid" laptop shape: an
+    /// Intel iGPU alongside an NVIDIA dGPU, both enumerated under
+    /// `/sys/class/drm`. Snapshotting a real tree shape like this (rather
+    /// than only single-card fixtures) is what lets the classifier be
+    /// exercised against diverse machines without needing physical
+    /// access to each one; `gpubox doctor --report` (see `src/doctor.rs`)
+    /// emits trees in this same shape so real-world reports can grow this
+    /// fixture corpus over time.
+    #[test]
+    fn hybrid_intel_igpu_plus_nvidia_dgpu_reports_both_devices() {
+        let tmp = tempfile::tempdir().unwrap();
+        let intel = tmp.path().join("card0/device");
+        write_id(&intel.join("vendor"), "0x8086\n");
+        write_id(&intel.join("device"), "0x46a6\n"); // Alder Lake-P GT2 (xe)
+
+        let nvidia = tmp.path().join("card1/device");
+        write_id(&nvidia.join("vendor"), "0x10de\n");
+        write_id(&nvidia.join("device"), "0x2684\n"); // AD102 - RTX 4090
+
+        let devices = probe_at(tmp.path());
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[0].class, GpuClass::Intel { class: "xe".into() });
+        assert_eq!(
+            devices[1].class,
+            GpuClass::Nvidia {
+                arch: "sm_89".into()
+            }
+        );
+
+        // A hybrid laptop must let the user pick either device, not just
+        // whichever `pick_primary` would silently default to.
+        let primary = super::super::pick_primary(&devices);
+        assert!(matches!(primary.class, GpuClass::Nvidia { .. }));
+        let selected = super::super::select(&devices, "intel").unwrap();
+        assert!(matches!(selected.class, GpuClass::Intel { .. }));
+    }
+
     #[cfg(unix)]
     #[test]
     fn non_virtual_platform_driver_is_still_reported() {
