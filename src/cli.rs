@@ -65,26 +65,36 @@ enum Command {
         /// vulkan, cpu) or index, same as `--gpu`. A positional
         /// convenience for the common case, e.g. `gpubox enter nvidia`.
         gpu: Option<String>,
-        /// Give the container a persistent name instead of the default
-        /// throwaway `--rm` container: created once, reattached on every
-        /// subsequent `enter`/`run` with the same name. Use `gpubox rm
-        /// <name>` to remove it and start fresh. Docker/Podman only.
-        #[arg(long)]
+        /// Use a container name other than the default (the resolved
+        /// stack, e.g. `cuda`/`rocm`/`vulkan`). Either way the container
+        /// is created once and reattached on every later `enter`/`run`.
+        /// Use `gpubox rm [name]` to remove it and start fresh.
+        /// Docker/Podman only.
+        #[arg(long, conflicts_with = "ephemeral")]
         name: Option<String>,
+        /// Use a throwaway container for this run instead of the
+        /// persistent default: torn down on exit, nothing installed
+        /// inside it survives. Docker/Podman only.
+        #[arg(long = "rm")]
+        ephemeral: bool,
     },
     /// Run a single command inside the sandbox, non-interactively.
     Run {
         /// See `enter`'s `--name`.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "ephemeral")]
         name: Option<String>,
+        /// See `enter`'s `--rm`.
+        #[arg(long = "rm")]
+        ephemeral: bool,
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
     },
-    /// Remove a persistent named container (see `enter --name`), so the
-    /// next `enter --name <name>` starts completely fresh.
+    /// Remove a persistent container (see `enter`/`run`), so the next
+    /// invocation with the same name starts completely fresh.
     Rm {
-        /// The name given to `enter --name`/`run --name`.
-        name: String,
+        /// The container name (defaults to `enter`'s: the resolved
+        /// stack, e.g. `cuda`/`rocm`/`vulkan`, if omitted).
+        name: Option<String>,
     },
     /// Emit the equivalent Dockerfile / Compose / Quadlet / Seatbelt /
     /// `.wsb` / devcontainer.json config instead of launching anything.
@@ -125,6 +135,7 @@ impl Cli {
                 .map(str::to_string)
                 .or_else(|| self.gpu.clone()),
             name: None,
+            ephemeral: false,
             no_home: self.no_home,
             read_only_home: self.read_only_home,
         }
@@ -135,12 +146,21 @@ pub fn run() -> Result<i32> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Command::Enter { gpu, name } => {
+        Command::Enter {
+            gpu,
+            name,
+            ephemeral,
+        } => {
             let mut overrides = cli.overrides(gpu.as_deref());
             overrides.name = name.clone();
+            overrides.ephemeral = *ephemeral;
             execute(&overrides, Vec::new(), true, cli.dry_run)
         }
-        Command::Run { name, command } => {
+        Command::Run {
+            name,
+            ephemeral,
+            command,
+        } => {
             if command.is_empty() {
                 anyhow::bail!(
                     "`gpubox run` requires a command, e.g. `gpubox run -- python train.py`"
@@ -148,9 +168,10 @@ pub fn run() -> Result<i32> {
             }
             let mut overrides = cli.overrides(None);
             overrides.name = name.clone();
+            overrides.ephemeral = *ephemeral;
             execute(&overrides, command.clone(), false, cli.dry_run)
         }
-        Command::Rm { name } => rm_cmd(&cli, name),
+        Command::Rm { name } => rm_cmd(&cli, name.as_deref()),
         Command::Generate { format, output } => {
             let overrides = cli.overrides(None);
             generate_cmd(&overrides, format.as_deref(), output.as_deref())?;
@@ -190,15 +211,33 @@ fn execute(
 ) -> Result<i32> {
     let mut plan: Plan = launch::plan(overrides, command, interactive)?;
 
-    if let Some(name) = overrides.name.clone() {
-        let engine = plan.engine.as_container_engine().ok_or_else(|| {
-            anyhow::anyhow!(
-                "--name is only supported with the docker/podman backends (resolved backend: \
-                 `{}`)",
-                plan.engine
-            )
-        })?;
-        return execute_named(engine, &mut plan, &name, dry_run);
+    // Persistence is the default (distrobox/toolbox's whole appeal is
+    // that the box feels like a second home instead of vanishing on
+    // exit): every `enter`/`run` reattaches to a container named after
+    // either `--name` or, absent that, the resolved stack
+    // (`cuda`/`rocm`/`vulkan`/...), rather than a one-off `--rm`
+    // container. `--rm` opts back into the old throwaway behavior.
+    // Backends with no notion of a persistent container (Seatbelt runs
+    // natively on the host; Windows Sandbox always boots a clean VM by
+    // design) silently fall through to the ephemeral/native path below -
+    // unless the user *explicitly* asked for `--name` on one of them,
+    // which is an error rather than being quietly ignored.
+    if !overrides.ephemeral {
+        let name = overrides
+            .name
+            .clone()
+            .unwrap_or_else(|| plan.resolved.stack.clone());
+        match plan.engine.as_container_engine() {
+            Some(engine) => return execute_named(engine, &mut plan, &name, dry_run),
+            None if overrides.name.is_some() => {
+                anyhow::bail!(
+                    "--name is only supported with the docker/podman backends (resolved \
+                     backend: `{}`)",
+                    plan.engine
+                );
+            }
+            None => {} // fall through: this backend has no persistent-container story.
+        }
     }
 
     if !dry_run {
@@ -219,8 +258,9 @@ fn execute(
     run_invocation(&invocation)
 }
 
-/// The `--name` path: create-or-reattach a persistent container, then exec
-/// into it. See `container` module docs for the full rationale.
+/// The persistent-container path (the default, or explicit `--name`):
+/// create-or-reattach a persistent container, then exec into it. See
+/// `container` module docs for the full rationale.
 fn execute_named(
     engine: backend::linux::ContainerEngine,
     plan: &mut Plan,
@@ -278,16 +318,35 @@ fn execute_named(
     run_invocation(&exec_invocation)
 }
 
-fn rm_cmd(cli: &Cli, name: &str) -> Result<i32> {
-    let engine = match &cli.backend {
-        Some(name) => backend::Engine::parse(name)
-            .ok_or_else(|| anyhow::anyhow!("unrecognized --backend `{name}`"))?,
-        None => backend::Engine::default_for_platform(),
+fn rm_cmd(cli: &Cli, name: Option<&str>) -> Result<i32> {
+    // An explicit name needs nothing beyond the engine choice - skip the
+    // hardware probe entirely (it walks /sys/class/drm on Linux or shells
+    // out to WMI on Windows, so it's neither instant nor guaranteed to
+    // succeed everywhere, and would be pure overhead here). Only fall
+    // back to a full `launch::plan` when no name was given: `gpubox rm`
+    // with no arguments has to know the resolved stack, since that's the
+    // same name `enter`/`run` would use without `--name`, so it "just
+    // works" as the mirror image of plain `gpubox enter`.
+    let (engine, name) = match name {
+        Some(name) => {
+            let engine = match &cli.backend {
+                Some(name) => backend::Engine::parse(name)
+                    .ok_or_else(|| anyhow::anyhow!("unrecognized --backend `{name}`"))?,
+                None => backend::Engine::default_for_platform(),
+            };
+            (engine, name.to_string())
+        }
+        None => {
+            let overrides = cli.overrides(None);
+            let plan = launch::plan(&overrides, Vec::new(), true)?;
+            (plan.engine, plan.resolved.stack)
+        }
     };
+
     let engine = engine.as_container_engine().ok_or_else(|| {
         anyhow::anyhow!("`gpubox rm` is only supported with the docker/podman backends")
     })?;
-    let full_name = container::container_name(name);
+    let full_name = container::container_name(&name);
 
     if cli.dry_run {
         println!("{} rm -f {full_name}", engine.program());

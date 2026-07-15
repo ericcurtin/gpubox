@@ -1,20 +1,24 @@
-//! Persistent named containers (`gpubox enter --name <name>` /
-//! `gpubox rm <name>`).
+//! Persistent containers (`gpubox enter` / `gpubox enter --name <name>` /
+//! `gpubox rm [name]`).
 //!
-//! Without `--name`, every `gpubox enter`/`gpubox run` launches a fresh
-//! `--rm` container (see `backend::linux`): anything installed via `apt`
-//! inside it vanishes the moment the shell exits, and the Vulkan/CPU
-//! fallback's `mesa-vulkan-drivers` et al. get reinstalled - a network
-//! hit plus a wait - on every single launch. `--name` opts into a
-//! long-lived container instead, the same model distrobox/toolbox use:
-//! the first `enter`/`run` creates it (detached, initialized once via the
-//! usual passwd/group/package wrapper), every subsequent invocation just
-//! `exec`s into the already-running container, and it persists across
-//! host reboots until `gpubox rm` deletes it.
+//! Persistence is the default, the same model distrobox/toolbox use:
+//! every `enter`/`run` reattaches to a container named after the
+//! resolved stack (`gpubox-cuda`, `gpubox-rocm`, ...) or, with `--name`,
+//! whatever name was given - either way, the first invocation creates it
+//! (detached, initialized once via the usual passwd/group/package
+//! wrapper), every subsequent one just `exec`s into the already-running
+//! container, and it persists across host reboots until `gpubox rm`
+//! deletes it. Without this, anything installed via `apt` inside a
+//! throwaway container vanishes the moment the shell exits, and the
+//! Vulkan/CPU fallback's `mesa-vulkan-drivers` et al. get reinstalled - a
+//! network hit plus a wait - on every single launch; `--rm` opts back
+//! into that one-off behavior for anyone who wants it (e.g. CI).
 //!
 //! Linux (Docker/Podman) only - Seatbelt runs natively on the host with
 //! nothing to persist, and Windows Sandbox always boots a clean VM by
-//! design.
+//! design; `gpubox` silently falls back to the old ephemeral/native path
+//! on those backends rather than erroring, unless `--name` was given
+//! explicitly.
 
 use crate::backend::linux::ContainerEngine;
 use crate::backend::{Invocation, LaunchSpec};
@@ -22,9 +26,10 @@ use crate::mounts;
 use anyhow::{Context, Result};
 use std::process::Command;
 
-/// Turn a user-supplied `--name` into the actual docker/podman container
-/// name gpubox creates, namespaced so it doesn't collide with unrelated
-/// containers on the host.
+/// Turn a container name (explicit `--name`, or the resolved stack name
+/// by default) into the actual docker/podman container name gpubox
+/// creates, namespaced so it doesn't collide with unrelated containers on
+/// the host.
 pub fn container_name(name: &str) -> String {
     format!("gpubox-{name}")
 }
