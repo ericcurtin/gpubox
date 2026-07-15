@@ -70,7 +70,7 @@ any of them per-invocation with `--image`, or permanently by editing
 
 | Stack    | Default image                                    | Notes |
 |----------|---------------------------------------------------|-------|
-| `cuda`   | `nvidia/cuda:12.4.1-devel-ubuntu22.04`             | NVIDIA's official CUDA devel image |
+| `cuda`   | `nvidia/cuda:12.9.2-devel-ubuntu24.04`             | NVIDIA's official CUDA devel image |
 | `rocm`   | `rocm/rocm-terminal:6.1`                           | AMD's official interactive ROCm image |
 | `oneapi` | `intel/oneapi-basekit:2025.3.2-0-devel-ubuntu24.04`| Intel's official oneAPI base toolkit |
 | `vulkan` | `ubuntu:24.04` + `mesa-vulkan-drivers`, `vulkan-tools`, `libvulkan1` | No single canonical vendor-neutral Vulkan image exists, so gpubox layers Mesa's Vulkan drivers onto plain Ubuntu; see `packages` in `data/quirks.toml` |

@@ -22,23 +22,23 @@
 
 [nvidia.sm_75]
 stack = "cuda"
-image = "nvidia/cuda:12.4.1-devel-ubuntu22.04"
+image = "nvidia/cuda:12.9.2-devel-ubuntu24.04"
 
 [nvidia.sm_80]
 stack = "cuda"
-image = "nvidia/cuda:12.4.1-devel-ubuntu22.04"
+image = "nvidia/cuda:12.9.2-devel-ubuntu24.04"
 
 [nvidia.sm_86]
 stack = "cuda"
-image = "nvidia/cuda:12.4.1-devel-ubuntu22.04"
+image = "nvidia/cuda:12.9.2-devel-ubuntu24.04"
 
 [nvidia.sm_89]
 stack = "cuda"
-image = "nvidia/cuda:12.4.1-devel-ubuntu22.04"
+image = "nvidia/cuda:12.9.2-devel-ubuntu24.04"
 
 [nvidia.sm_90]
 stack = "cuda"
-image = "nvidia/cuda:12.4.1-devel-ubuntu22.04"
+image = "nvidia/cuda:12.9.2-devel-ubuntu24.04"
 
 [nvidia.unknown]
 stack = "vulkan"
