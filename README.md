@@ -58,7 +58,7 @@ Five stages, each its own module:
 | Windows  | Windows Sandbox                   | Hyper-V-backed, non-Linux (unlike WSL2), with opt-in GPU passthrough via `<VGpu>Enable</VGpu>` |
 
 `src/generate.rs` renders the same plan as an inspectable file instead of
-running anything: a Containerfile, a Compose file, a Podman Quadlet unit,
+running anything: a Dockerfile, a Compose file, a Podman Quadlet unit,
 a Seatbelt `.sb` profile, or a Windows Sandbox `.wsb` config - so the
 "magic" is reproducible in CI or checked into a repo.
 

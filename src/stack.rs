@@ -23,7 +23,7 @@ pub struct StackRule {
     /// Apt packages to layer on top of `image` (used by the Vulkan/CPU
     /// fallbacks, which start from a plain distro base rather than a
     /// vendor-published image). Consumed by `gpubox generate --format
-    /// containerfile`; ignored otherwise.
+    /// dockerfile`; ignored otherwise.
     #[serde(default)]
     pub packages: Vec<String>,
 }

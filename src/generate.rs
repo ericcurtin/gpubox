@@ -1,4 +1,4 @@
-//! `gpubox generate`: emit the equivalent Containerfile / Compose file /
+//! `gpubox generate`: emit the equivalent Dockerfile / Compose file /
 //! Podman Quadlet / Seatbelt profile / `.wsb` config for a resolved
 //! launch, so the "magic" of hardware detection + stack resolution is
 //! inspectable, diffable, and reproducible outside of gpubox itself (e.g.
@@ -11,7 +11,7 @@ use std::fmt::Write as _;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
-    Containerfile,
+    Dockerfile,
     Compose,
     Quadlet,
     Seatbelt,
@@ -21,7 +21,7 @@ pub enum Format {
 impl Format {
     pub fn parse(s: &str) -> Option<Format> {
         match s.to_ascii_lowercase().as_str() {
-            "containerfile" | "dockerfile" => Some(Format::Containerfile),
+            "dockerfile" => Some(Format::Dockerfile),
             "compose" | "docker-compose" => Some(Format::Compose),
             "quadlet" => Some(Format::Quadlet),
             "seatbelt" | "sb" => Some(Format::Seatbelt),
@@ -42,7 +42,7 @@ impl Format {
 
     pub fn default_filename(self) -> &'static str {
         match self {
-            Format::Containerfile => "Containerfile",
+            Format::Dockerfile => "Dockerfile",
             Format::Compose => "compose.yaml",
             Format::Quadlet => "gpubox.container",
             Format::Seatbelt => "gpubox.sb",
@@ -70,7 +70,7 @@ fn render_raw_command_comment(inv: &Invocation) -> String {
     line
 }
 
-fn render_containerfile(resolved: &ResolvedStack, spec: &LaunchSpec) -> String {
+fn render_dockerfile(resolved: &ResolvedStack, spec: &LaunchSpec) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
@@ -227,7 +227,7 @@ fn render_quadlet(spec: &LaunchSpec) -> String {
 /// command-for-reference comment).
 pub fn render(format: Format, resolved: &ResolvedStack, spec: &LaunchSpec) -> Result<String> {
     match format {
-        Format::Containerfile => Ok(render_containerfile(resolved, spec)),
+        Format::Dockerfile => Ok(render_dockerfile(resolved, spec)),
         Format::Compose => {
             let inv = backend::build_invocation(Engine::Docker, spec)?;
             Ok(render_compose(&inv, spec))
@@ -248,12 +248,12 @@ pub fn validate_format_for_stack(format: Format, resolved: &ResolvedStack) -> Re
     }
     let is_linux_format = matches!(
         format,
-        Format::Containerfile | Format::Compose | Format::Quadlet
+        Format::Dockerfile | Format::Compose | Format::Quadlet
     );
     if is_linux_format && resolved.stack == "metal" {
         bail!(
             "the `metal` stack runs natively via Seatbelt on macOS and has no container \
-             image to put in a Containerfile/Compose file/Quadlet unit; use `--format seatbelt` \
+             image to put in a Dockerfile/Compose file/Quadlet unit; use `--format seatbelt` \
              instead"
         );
     }
@@ -299,15 +299,15 @@ mod tests {
     }
 
     #[test]
-    fn containerfile_includes_from_and_env() {
-        let out = render(Format::Containerfile, &resolved(), &spec()).unwrap();
+    fn dockerfile_includes_from_and_env() {
+        let out = render(Format::Dockerfile, &resolved(), &spec()).unwrap();
         assert!(out.contains("FROM rocm/rocm-terminal:6.1"));
         assert!(out.contains("ENV HSA_OVERRIDE_GFX_VERSION=9.0.0"));
         assert!(out.contains("gpubox-prompt.sh"));
     }
 
     #[test]
-    fn containerfile_installs_packages_for_fallback_stacks() {
+    fn dockerfile_installs_packages_for_fallback_stacks() {
         let mut vulkan_resolved = resolved();
         vulkan_resolved.stack = "vulkan".to_string();
         vulkan_resolved.image = "ubuntu:24.04".to_string();
@@ -318,7 +318,7 @@ mod tests {
         let mut vulkan_spec = spec();
         vulkan_spec.image = "ubuntu:24.04".to_string();
 
-        let out = render(Format::Containerfile, &vulkan_resolved, &vulkan_spec).unwrap();
+        let out = render(Format::Dockerfile, &vulkan_resolved, &vulkan_spec).unwrap();
         assert!(out.contains("FROM ubuntu:24.04"));
         assert!(out.contains("apt-get install -y --no-install-recommends"));
         assert!(out.contains("mesa-vulkan-drivers"));
@@ -355,7 +355,7 @@ mod tests {
     fn linux_formats_reject_metal_stack() {
         let mut metal = resolved();
         metal.stack = "metal".to_string();
-        for format in [Format::Containerfile, Format::Compose, Format::Quadlet] {
+        for format in [Format::Dockerfile, Format::Compose, Format::Quadlet] {
             assert!(validate_format_for_stack(format, &metal).is_err());
         }
         // Seatbelt is exactly the right format for the metal stack.
@@ -365,7 +365,7 @@ mod tests {
     #[test]
     fn format_parsing_roundtrips_default_filenames() {
         for format in [
-            Format::Containerfile,
+            Format::Dockerfile,
             Format::Compose,
             Format::Quadlet,
             Format::Seatbelt,
@@ -374,7 +374,7 @@ mod tests {
             let name = format.default_filename();
             assert!(!name.is_empty());
         }
-        assert_eq!(Format::parse("dockerfile"), Some(Format::Containerfile));
+        assert_eq!(Format::parse("dockerfile"), Some(Format::Dockerfile));
         assert_eq!(Format::parse("wsb"), Some(Format::WindowsSandbox));
         assert_eq!(Format::parse("nope"), None);
     }

@@ -9,7 +9,7 @@
 # namespaces. Where no single upstream vendor image fits (the Vulkan and
 # CPU fallbacks), we point at a plain upstream distro image plus an
 # optional `packages` list of apt packages to layer on top via `gpubox
-# generate --format containerfile`.
+# generate --format dockerfile`.
 #
 # Community contributions welcome. If you have a card that needs a
 # special-case env var (e.g. "gfx90c reports as unsupported but works with
@@ -152,7 +152,7 @@ packages = ["mesa-vulkan-drivers", "vulkan-tools", "libvulkan1"]
 notes = """
 No vendor-specific stack matched; using a plain Ubuntu base with Mesa's \
 Vulkan drivers layered on top as the universal fallback. Run `gpubox \
-generate --format containerfile` to see (or customize) exactly what gets \
+generate --format dockerfile` to see (or customize) exactly what gets \
 installed.
 """
 

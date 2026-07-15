@@ -48,10 +48,10 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
     },
-    /// Emit the equivalent Containerfile / Compose / Quadlet / Seatbelt /
+    /// Emit the equivalent Dockerfile / Compose / Quadlet / Seatbelt /
     /// `.wsb` config instead of launching anything.
     Generate {
-        /// containerfile, compose, quadlet, seatbelt, or windows-sandbox.
+        /// dockerfile, compose, quadlet, seatbelt, or windows-sandbox.
         /// Defaults to whatever's idiomatic for the host platform.
         #[arg(long)]
         format: Option<String>,
