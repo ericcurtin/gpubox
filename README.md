@@ -1,5 +1,7 @@
 # gpubox
 
+_See also: [Introducing gpubox](docs/blog/2026-07-15-introducing-gpubox.md), the announcement post._
+
 Auto-detecting GPU container launcher. Type one command - `gpubox enter` -
 and land in a shell where `nvidia-smi`, `rocm-smi`, or `vulkaninfo` just
 works, with your home directory, dotfiles, and current working directory
