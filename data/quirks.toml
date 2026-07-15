@@ -1,0 +1,147 @@
+# The gpubox quirks database.
+#
+# This file is the real product: it maps a normalized hardware
+# classification (see data/pci_ids.toml) to a runtime stack, a default
+# container image, and any environment variable overrides needed to make
+# that stack actually work on that hardware.
+#
+# Community contributions welcome. If you have a card that needs a
+# special-case env var (e.g. "gfx90c reports as unsupported but works with
+# ROCm if you set HSA_OVERRIDE_GFX_VERSION=9.0.0"), add an entry below and
+# send a PR - that folk knowledge is exactly what this file is for.
+#
+# Every vendor table must have a "default" (or "unknown") entry that is
+# used when the detected arch tag has no specific rule: this is what makes
+# newly-released hardware degrade gracefully instead of failing outright.
+
+[nvidia.sm_75]
+stack = "cuda"
+image = "gpubox/cuda:12.4"
+
+[nvidia.sm_80]
+stack = "cuda"
+image = "gpubox/cuda:12.4"
+
+[nvidia.sm_86]
+stack = "cuda"
+image = "gpubox/cuda:12.4"
+
+[nvidia.sm_89]
+stack = "cuda"
+image = "gpubox/cuda:12.4"
+
+[nvidia.sm_90]
+stack = "cuda"
+image = "gpubox/cuda:12.4"
+
+[nvidia.unknown]
+stack = "vulkan"
+image = "gpubox/vulkan:latest"
+notes = """
+Unrecognized NVIDIA compute capability. Falling back to the Vulkan \
+runtime. Please file a PR adding this device id to data/pci_ids.toml \
+so gpubox can pick the right CUDA image next time.
+"""
+
+[amd.gfx900]
+stack = "rocm"
+image = "gpubox/rocm:6.1"
+
+[amd.gfx902]
+stack = "rocm"
+image = "gpubox/rocm:6.1"
+env = { HSA_OVERRIDE_GFX_VERSION = "9.0.0" }
+notes = """
+Raven Ridge (gfx902) is not on ROCm's official support list but works \
+when HSA_OVERRIDE_GFX_VERSION reports it as gfx9.0.0.
+"""
+
+[amd.gfx90c]
+stack = "rocm"
+image = "gpubox/rocm:6.1"
+env = { HSA_OVERRIDE_GFX_VERSION = "9.0.0" }
+notes = """
+Renoir (gfx90c) integrated graphics is not officially supported by ROCm \
+but works when HSA_OVERRIDE_GFX_VERSION overrides it to report as \
+gfx9.0.0.
+"""
+
+[amd.gfx1030]
+stack = "rocm"
+image = "gpubox/rocm:6.1"
+
+[amd.gfx1031]
+stack = "rocm"
+image = "gpubox/rocm:6.1"
+env = { HSA_OVERRIDE_GFX_VERSION = "10.3.0" }
+notes = "Navi 22 (gfx1031) needs HSA_OVERRIDE_GFX_VERSION=10.3.0 on some ROCm point releases."
+
+[amd.gfx1032]
+stack = "rocm"
+image = "gpubox/rocm:6.1"
+env = { HSA_OVERRIDE_GFX_VERSION = "10.3.0" }
+
+[amd.gfx1100]
+stack = "rocm"
+image = "gpubox/rocm:6.1"
+
+[amd.gfx1101]
+stack = "rocm"
+image = "gpubox/rocm:6.1"
+
+[amd.gfx1102]
+stack = "rocm"
+image = "gpubox/rocm:6.1"
+
+[amd.gfx90a]
+stack = "rocm"
+image = "gpubox/rocm:6.1"
+
+[amd.gfx942]
+stack = "rocm"
+image = "gpubox/rocm:6.1"
+
+[amd.unknown]
+stack = "vulkan"
+image = "gpubox/vulkan:latest"
+notes = """
+Unrecognized AMD gfx architecture. Falling back to the Vulkan runtime. \
+Please file a PR adding this device id to data/pci_ids.toml, and if you \
+know it needs an HSA_OVERRIDE_GFX_VERSION quirk, add that here too.
+"""
+
+[intel.arc]
+stack = "oneapi"
+image = "gpubox/oneapi:2024.1"
+
+[intel.xe]
+stack = "oneapi"
+image = "gpubox/oneapi:2024.1"
+
+[intel.igpu]
+stack = "vulkan"
+image = "gpubox/vulkan:latest"
+notes = """
+Pre-Xe Intel integrated graphics lack Level Zero / oneAPI support; \
+using the Vulkan fallback instead.
+"""
+
+[apple.default]
+stack = "metal"
+image = "gpubox/metal:latest"
+notes = """
+macOS containers run natively under Seatbelt sandboxing rather than a \
+Linux container runtime, so there is no device node to pass through. \
+GPU access happens via Metal on the host and is available to the \
+sandboxed process directly.
+"""
+
+[vulkan.default]
+stack = "vulkan"
+image = "gpubox/vulkan:latest"
+notes = "No vendor-specific stack matched; using the universal Vulkan fallback image."
+
+[none.default]
+stack = "cpu"
+image = "gpubox/cpu:latest"
+notes = "No GPU detected. Running on CPU."

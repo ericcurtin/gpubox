@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            runner: ubuntu-latest
+          - name: Linux aarch64
+            runner: ubuntu-24.04-arm
+          - name: macOS aarch64
+            runner: macos-14
+          - name: Windows x86_64
+            runner: windows-latest
+          - name: Windows aarch64
+            runner: windows-11-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Build
+        run: cargo build --release --all-targets
+
+      - name: Test
+        run: cargo test --release
+
+  # Aggregate gate so branch protection only needs to name one required
+  # check, regardless of how the matrix above changes over time.
+  ci-ok:
+    name: CI ok
+    if: always()
+    needs: build-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check matrix result
+        run: |
+          if [ "${{ needs.build-test.result }}" != "success" ]; then
+            echo "One or more matrix jobs failed"
+            exit 1
+          fi

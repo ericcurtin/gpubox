@@ -1,0 +1,73 @@
+# Hardware classification database.
+#
+# Maps PCI vendor/device IDs (as observed under /sys/class/drm/*/device on
+# Linux, or the VEN_/DEV_ fields of a PnP device id on Windows) to a
+# normalized architecture tag. This file answers "what is this chip",
+# nothing more - the "what do I do about it" question is answered by
+# data/quirks.toml.
+#
+# This is intentionally a starting set, not an exhaustive one. If gpubox
+# misidentifies (or fails to identify) your GPU, please send a PR adding
+# the missing device id here. Vendor id -> device id -> arch tag.
+#
+# Arch tags:
+#   NVIDIA: CUDA compute capability, e.g. "sm_86"
+#   AMD:    LLVM target / gfx architecture, e.g. "gfx1100"
+#   Intel:  coarse class, one of "arc", "xe", "igpu"
+
+[vendors]
+nvidia = "0x10de"
+amd = "0x1002"
+intel = "0x8086"
+
+[nvidia]
+# Turing (RTX 20xx / GTX 16xx)
+"0x1e04" = "sm_75" # TU102 - RTX 2080 Ti
+"0x1e87" = "sm_75" # TU104 - RTX 2080 Super
+"0x1f08" = "sm_75" # TU117 - GTX 1650
+# Ampere (RTX 30xx / A-series datacenter)
+"0x2204" = "sm_86" # GA102 - RTX 3090
+"0x2206" = "sm_86" # GA102 - RTX 3080
+"0x2484" = "sm_86" # GA104 - RTX 3070
+"0x25a0" = "sm_86" # GA107 - RTX 3050 mobile
+"0x20b0" = "sm_80" # GA100 - A100
+# Ada Lovelace (RTX 40xx)
+"0x2684" = "sm_89" # AD102 - RTX 4090
+"0x2704" = "sm_89" # AD103 - RTX 4080
+"0x2782" = "sm_89" # AD104 - RTX 4070 Ti
+"0x27a0" = "sm_89" # AD107 - RTX 4060
+# Hopper (datacenter)
+"0x2330" = "sm_90" # GH100 - H100
+
+[amd]
+# GCN 5 / Vega
+"0x687f" = "gfx900" # Vega 10 - Vega 56/64
+"0x15d8" = "gfx902" # Raven Ridge iGPU (Ryzen 2xxx/3xxx G-series)
+"0x1636" = "gfx90c" # Renoir iGPU (Ryzen 4xxx G-series / mobile)
+"0x164e" = "gfx90c" # Renoir iGPU (alt revision)
+# RDNA2 (RX 6000)
+"0x73bf" = "gfx1030" # Navi 21 - RX 6800/6900 XT
+"0x73df" = "gfx1031" # Navi 22 - RX 6700 XT
+"0x73ff" = "gfx1032" # Navi 23 - RX 6600
+# RDNA3 (RX 7000)
+"0x744c" = "gfx1100" # Navi 31 - RX 7900 XTX/XT
+"0x7480" = "gfx1101" # Navi 32 - RX 7800 XT
+"0x7551" = "gfx1102" # Navi 33 - RX 7600
+# CDNA (datacenter)
+"0x7408" = "gfx90a" # MI210/MI250
+"0x74a1" = "gfx942"  # MI300X
+
+[intel]
+# Arc (discrete, Xe-HPG)
+"0x5690" = "arc" # DG2/Arc A770
+"0x56a0" = "arc" # DG2/Arc A770 (desktop)
+"0x56a1" = "arc" # Arc A750
+"0x56a5" = "arc" # Arc A380
+# Xe (integrated, 12th gen+)
+"0x4680" = "xe" # Alder Lake-S GT1
+"0x46a6" = "xe" # Alder Lake-P GT2
+"0xa780" = "xe" # Raptor Lake-S GT1
+# Older integrated (Gen 8-11, no Level Zero / oneAPI support)
+"0x1912" = "igpu" # Skylake GT2
+"0x5917" = "igpu" # Kaby Lake GT2
+"0x9a49" = "igpu" # Ice Lake GT2

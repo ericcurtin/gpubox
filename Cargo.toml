@@ -1,0 +1,34 @@
+[package]
+name = "gpubox"
+version = "0.1.0"
+edition = "2021"
+description = "Auto-detecting GPU container launcher: distrobox-style host integration, zero host GPU driver install required"
+license = "Apache-2.0"
+repository = "https://github.com/ericcurtin/gpubox"
+readme = "README.md"
+rust-version = "1.75"
+
+[[bin]]
+name = "gpubox"
+path = "src/main.rs"
+
+[lib]
+name = "gpubox"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
