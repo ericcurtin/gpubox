@@ -75,6 +75,15 @@ pub fn report(overrides: &Overrides) -> Result<String> {
         let _ = writeln!(out, "Device injection  : {reason}");
     }
 
+    if plan.engine.as_container_engine().is_some() {
+        let _ = writeln!(
+            out,
+            "Container         : {} (persistent by default; override with --name, or use \
+             --rm for a throwaway one)",
+            crate::container::container_name(&plan.resolved.stack)
+        );
+    }
+
     if plan.engine == Engine::Podman {
         let _ = writeln!(
             out,
@@ -134,7 +143,14 @@ pub fn report(overrides: &Overrides) -> Result<String> {
     );
     let _ = writeln!(
         out,
-        "  --name <name>          persistent named container: reattach across launches, `gpubox rm <name>` to reset"
+        "  --name <name>          [enter/run] use this container name instead of the default \
+         (`{}`)",
+        plan.resolved.stack
+    );
+    let _ = writeln!(
+        out,
+        "  --rm                   [enter/run] use a throwaway container for this run instead \
+         of the persistent default"
     );
     let _ = writeln!(
         out,

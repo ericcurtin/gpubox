@@ -81,23 +81,40 @@ a Seatbelt `.sb` profile, a Windows Sandbox `.wsb` config, or a VS Code
 `devcontainer.json` - so the "magic" is reproducible in CI, checked into a
 repo, or opened straight in Dev Containers/Codespaces.
 
-## Persistent named containers
+## Persistent containers by default
 
-By default every `gpubox enter`/`gpubox run` is a throwaway `--rm`
-container: anything `apt install`ed inside it vanishes when the shell
-exits, and the Vulkan/CPU fallback's `mesa-vulkan-drivers` et al. get
-reinstalled on every single launch. `--name` opts into a long-lived
-container instead, the same model distrobox/toolbox use:
+Containers are persistent, the same model distrobox/toolbox use:
+`gpubox enter`/`gpubox run` create a container named after the resolved
+stack (`gpubox-cuda`, `gpubox-rocm`, `gpubox-vulkan`, ...) the first time,
+then reattach to it on every later invocation instead of tearing it down
+- anything `apt install`ed inside it is still there next time, and the
+Vulkan/CPU fallback's `mesa-vulkan-drivers` et al. only ever get installed
+once instead of on every single launch:
 
 ```
-gpubox enter --name ml         # first run: creates it; every run after: reattaches
+gpubox enter                   # first run: creates gpubox-<stack>; every run after: reattaches
+gpubox run -- python train.py
+gpubox rm                      # delete the default container and start fresh next time
+```
+
+Override the container name with `--name`, or opt back into the old
+one-off `--rm` behavior for a single invocation:
+
+```
+gpubox enter --name ml         # a separate, independently-named persistent container
 gpubox run --name ml -- python train.py
-gpubox rm ml                   # delete it and start fresh next time
+gpubox rm ml
+
+gpubox enter --rm              # throwaway container, torn down on exit (e.g. for CI)
 ```
 
-Separately, and regardless of `--name`: any image that needs extra apt
-packages layered on (the Vulkan/CPU fallback) is built and tagged
-**once**, locally, and reused - so even ephemeral `--rm` runs skip the
+(Docker/Podman only - Seatbelt runs natively on the host with nothing to
+persist, and Windows Sandbox always boots a clean VM by design, so both
+silently keep their original one-shot behavior.)
+
+Separately, and regardless of persistence: any image that needs extra
+apt packages layered on (the Vulkan/CPU fallback) is built and tagged
+**once**, locally, and reused - so even a `--rm` run skips the
 `apt-get install` network hit and wait after the first launch. See
 `src/cache.rs`.
 
@@ -167,10 +184,12 @@ any of them per-invocation with `--image`, or permanently by editing
 ## Usage
 
 ```
-gpubox enter                     # interactive shell in the auto-detected sandbox
-gpubox enter --name ml           # persistent: reattaches on every later `enter --name ml`
-gpubox run -- python train.py    # non-interactive
-gpubox rm ml                     # delete a persistent named container
+gpubox enter                     # interactive shell in the persistent gpubox-<stack> container
+gpubox enter --name ml           # a separate, independently-named persistent container
+gpubox run -- python train.py    # non-interactive, same persistence
+gpubox enter --rm                # throwaway container for this run only
+gpubox rm                        # delete the default container
+gpubox rm ml                     # delete a specifically-named one
 gpubox generate --format compose -o compose.yaml
 gpubox doctor                    # explain what was detected and why
 gpubox doctor --json             # same, structured
@@ -189,6 +208,13 @@ Global overrides (work with every subcommand):
 --no-home                 don't mount $HOME into the sandbox at all
 --read-only-home           mount $HOME read-only instead of read-write
 --dry-run
+```
+
+`enter`/`run`-specific:
+
+```
+--name <name>   use this container name instead of the default (the resolved stack)
+--rm            use a throwaway container for this run instead of the persistent default
 ```
 
 ## Contributing hardware support

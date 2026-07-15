@@ -21,11 +21,16 @@ pub struct Overrides {
     /// `gpubox enter nvidia`). `None` keeps the default
     /// [`probe::pick_primary`] behavior.
     pub gpu: Option<String>,
-    /// Give the container a persistent name (`--name ml`): the container
-    /// is created once and reattached on subsequent `enter`/`run`
-    /// invocations instead of being torn down with `--rm`. See
-    /// [`crate::container`].
+    /// Give the container a persistent name (`--name ml`) instead of the
+    /// default (the resolved stack name, e.g. `cuda`/`rocm`/`vulkan`):
+    /// either way, the container is created once and reattached on
+    /// subsequent `enter`/`run` invocations instead of being torn down.
+    /// See [`crate::container`].
     pub name: Option<String>,
+    /// Use a throwaway `--rm` container for this invocation instead of a
+    /// persistent one (the pre-persistence default). Mutually exclusive
+    /// with `name`.
+    pub ephemeral: bool,
     /// Don't mount `$HOME` into the container at all.
     pub no_home: bool,
     /// Mount `$HOME` read-only instead of read-write.
