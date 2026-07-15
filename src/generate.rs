@@ -251,7 +251,7 @@ fn render_quadlet(spec: &LaunchSpec) -> String {
     out.push('\n');
     out.push_str("[Container]\n");
     let _ = writeln!(out, "Image={}", spec.image);
-    // Use the exact same wrapper argv `enter`/`run` would exec inside the
+    // Use the exact same wrapper argv `gpubox run` would exec inside the
     // container (passwd/group fixup, optional apt install, privilege
     // drop via setpriv - see backend::linux), shell-quoted, so the
     // generated unit is faithful to what gpubox actually does rather

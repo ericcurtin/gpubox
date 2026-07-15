@@ -1,18 +1,20 @@
-//! Persistent containers (`gpubox enter` / `gpubox enter --name <name>` /
+//! Persistent containers (`gpubox run` / `gpubox run --name <name>` /
 //! `gpubox rm [name]`).
 //!
 //! Persistence is the default, the same model distrobox/toolbox use:
-//! every `enter`/`run` reattaches to a container named after the
-//! resolved stack (`gpubox-cuda`, `gpubox-rocm`, ...) or, with `--name`,
-//! whatever name was given - either way, the first invocation creates it
-//! (detached, initialized once via the usual passwd/group/package
-//! wrapper), every subsequent one just `exec`s into the already-running
-//! container, and it persists across host reboots until `gpubox rm`
-//! deletes it. Without this, anything installed via `apt` inside a
-//! throwaway container vanishes the moment the shell exits, and the
-//! Vulkan/CPU fallback's `mesa-vulkan-drivers` et al. get reinstalled - a
-//! network hit plus a wait - on every single launch; `--rm` opts back
-//! into that one-off behavior for anyone who wants it (e.g. CI).
+//! every `gpubox run` (interactive, i.e. no trailing command - the old
+//! `gpubox enter`) reattaches to a single container, [`DEFAULT_CONTAINER_NAME`]
+//! ("gpubox"), shared across every stack/hardware config on the host,
+//! unless `--name <name>` asks for a separate one (`gpubox-<name>`)
+//! instead. Either way, the first invocation creates it (detached,
+//! initialized once via the usual passwd/group/package wrapper), every
+//! subsequent one just `exec`s into the already-running container, and it
+//! persists across host reboots until `gpubox rm` deletes it. Without
+//! this, anything installed via `apt` inside a throwaway container
+//! vanishes the moment the shell exits, and the Vulkan/CPU fallback's
+//! `mesa-vulkan-drivers` et al. get reinstalled - a network hit plus a
+//! wait - on every single launch; `--rm` opts back into that one-off
+//! behavior for anyone who wants it (e.g. CI).
 //!
 //! Linux (Docker/Podman) only - Seatbelt runs natively on the host with
 //! nothing to persist, and Windows Sandbox always boots a clean VM by
@@ -26,10 +28,19 @@ use crate::mounts;
 use anyhow::{Context, Result};
 use std::process::Command;
 
-/// Turn a container name (explicit `--name`, or the resolved stack name
-/// by default) into the actual docker/podman container name gpubox
-/// creates, namespaced so it doesn't collide with unrelated containers on
-/// the host.
+/// The container name used when no `--name` is given: one shared
+/// "personal box" per host, regardless of which stack/hardware config
+/// resolved this particular invocation (switching GPUs or `--gfx-override`
+/// just reattaches to this same container) - matching distrobox/toolbox's
+/// single-box-by-default model. An explicit `--name <x>` instead produces
+/// [`container_name`]'s `gpubox-<x>`, keeping user-chosen names clearly
+/// distinguished from this one.
+pub const DEFAULT_CONTAINER_NAME: &str = "gpubox";
+
+/// Turn a user-supplied `--name` into the actual docker/podman container
+/// name gpubox creates, namespaced so it doesn't collide with unrelated
+/// containers on the host, and so it can never collide with
+/// [`DEFAULT_CONTAINER_NAME`] itself.
 pub fn container_name(name: &str) -> String {
     format!("gpubox-{name}")
 }
@@ -62,12 +73,12 @@ pub fn inspect(engine_program: &str, name: &str) -> ContainerState {
 }
 
 /// Build the `<engine> run -d --name <name> ... sleep infinity` invocation
-/// that creates the persistent container the first time `--name` is used.
+/// that creates the persistent container the first time it's needed.
 /// Deliberately omits `--rm` (the whole point is that it survives) and
 /// runs detached; the passwd/group fixup and any one-time package install
 /// still happen here via the normal wrapper script (see
 /// `backend::linux::command_argv_with_tail`), so they only ever run once
-/// per container rather than on every `enter`.
+/// per container rather than on every `gpubox run`.
 pub fn create_invocation(engine: ContainerEngine, spec: &LaunchSpec, name: &str) -> Invocation {
     let mut args = vec!["run".to_string(), "-d".to_string(), "--name".to_string()];
     args.push(name.to_string());
@@ -134,8 +145,8 @@ pub fn start_invocation(engine: ContainerEngine, name: &str) -> Invocation {
     }
 }
 
-/// Remove a named container outright (`gpubox rm <name>`), so the next
-/// `enter --name <name>` starts completely fresh.
+/// Remove a container outright (`gpubox rm [name]`), so the next `gpubox
+/// run`/`gpubox run --name <name>` starts completely fresh.
 pub fn remove(engine_program_name: &str, name: &str) -> Result<()> {
     let status = Command::new(engine_program_name)
         .args(["rm", "-f", name])
@@ -175,6 +186,19 @@ mod tests {
     #[test]
     fn container_name_is_namespaced() {
         assert_eq!(container_name("ml"), "gpubox-ml");
+    }
+
+    #[test]
+    fn default_container_name_is_bare_gpubox() {
+        // The default (no `--name`) container is one shared box, not
+        // namespaced per stack - distinct from an explicit `--name`,
+        // which always goes through `container_name` and gets the
+        // `gpubox-` prefix.
+        assert_eq!(DEFAULT_CONTAINER_NAME, "gpubox");
+        assert_ne!(
+            DEFAULT_CONTAINER_NAME,
+            container_name(DEFAULT_CONTAINER_NAME)
+        );
     }
 
     #[test]

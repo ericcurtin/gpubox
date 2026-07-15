@@ -1,4 +1,4 @@
-//! Command-line interface: `enter`, `run`, `rm`, `generate`, `doctor`,
+//! Command-line interface: `run`, `rm`, `generate`, `doctor`,
 //! `completions`, `man`.
 
 use crate::backend::{self, Invocation};
@@ -34,9 +34,8 @@ pub struct Cli {
     gfx_override: Option<String>,
 
     /// Pick a specific GPU on a multi-GPU/hybrid host, either by 0-based
-    /// index (`--gpu 1`) or coarse vendor name (`--gpu nvidia`). Also
-    /// available as a positional argument on `enter`/`run`, e.g.
-    /// `gpubox enter nvidia`.
+    /// index (`--gpu 1`) or coarse vendor name (`--gpu nvidia`), e.g.
+    /// `gpubox run --gpu nvidia`.
     #[arg(long, global = true)]
     gpu: Option<String>,
 
@@ -59,17 +58,17 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Enter an interactive shell inside the auto-detected GPU sandbox.
-    Enter {
-        /// Select a GPU by vendor name (nvidia, amd, intel, apple,
-        /// vulkan, cpu) or index, same as `--gpu`. A positional
-        /// convenience for the common case, e.g. `gpubox enter nvidia`.
-        gpu: Option<String>,
-        /// Use a container name other than the default (the resolved
-        /// stack, e.g. `cuda`/`rocm`/`vulkan`). Either way the container
-        /// is created once and reattached on every later `enter`/`run`.
-        /// Use `gpubox rm [name]` to remove it and start fresh.
-        /// Docker/Podman only.
+    /// Enter an interactive shell, or run a command, inside the
+    /// auto-detected GPU sandbox. With no trailing command this is an
+    /// interactive shell (what used to be the separate `enter`
+    /// subcommand); with one (after `--`) it runs non-interactively and
+    /// exits.
+    Run {
+        /// Use a container name other than the default
+        /// (`gpubox`, shared across every stack/hardware config on this
+        /// host). Either way the container is created once and
+        /// reattached on every later `gpubox run`. Use `gpubox rm [name]`
+        /// to remove it and start fresh. Docker/Podman only.
         #[arg(long, conflicts_with = "ephemeral")]
         name: Option<String>,
         /// Use a throwaway container for this run instead of the
@@ -77,23 +76,16 @@ enum Command {
         /// inside it survives. Docker/Podman only.
         #[arg(long = "rm")]
         ephemeral: bool,
-    },
-    /// Run a single command inside the sandbox, non-interactively.
-    Run {
-        /// See `enter`'s `--name`.
-        #[arg(long, conflicts_with = "ephemeral")]
-        name: Option<String>,
-        /// See `enter`'s `--rm`.
-        #[arg(long = "rm")]
-        ephemeral: bool,
+        /// Command to run non-interactively, e.g. `-- python train.py`.
+        /// Omit entirely for an interactive shell.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
     },
-    /// Remove a persistent container (see `enter`/`run`), so the next
-    /// invocation with the same name starts completely fresh.
+    /// Remove a persistent container (see `run`/`run --name`), so the
+    /// next invocation with the same name starts completely fresh.
     Rm {
-        /// The container name (defaults to `enter`'s: the resolved
-        /// stack, e.g. `cuda`/`rocm`/`vulkan`, if omitted).
+        /// The container name (defaults to the same default `gpubox`
+        /// container `run` uses, if omitted).
         name: Option<String>,
     },
     /// Emit the equivalent Dockerfile / Compose / Quadlet / Seatbelt /
@@ -125,63 +117,71 @@ enum Command {
     Man,
 }
 
-impl Cli {
-    fn overrides(&self, positional_gpu: Option<&str>) -> Overrides {
-        Overrides {
-            backend: self.backend.clone(),
-            image: self.image.clone(),
-            gfx_override: self.gfx_override.clone(),
-            gpu: positional_gpu
-                .map(str::to_string)
-                .or_else(|| self.gpu.clone()),
-            name: None,
-            ephemeral: false,
-            no_home: self.no_home,
-            read_only_home: self.read_only_home,
-        }
+/// Build an [`Overrides`] from the global flags, taking ownership of each
+/// (rather than cloning out of a `&Cli`) - safe since `run()` below
+/// destructures `Cli` once, so nothing else needs these values afterward.
+fn overrides_from(
+    backend: Option<String>,
+    image: Option<String>,
+    gfx_override: Option<String>,
+    gpu: Option<String>,
+    no_home: bool,
+    read_only_home: bool,
+) -> Overrides {
+    Overrides {
+        backend,
+        image,
+        gfx_override,
+        gpu,
+        name: None,
+        ephemeral: false,
+        no_home,
+        read_only_home,
     }
 }
 
 pub fn run() -> Result<i32> {
-    let cli = Cli::parse();
+    // Destructure the whole struct in one go (rather than matching on
+    // `cli.command` and separately reading other fields off `&cli`) so
+    // every field can be moved into whichever single arm below actually
+    // needs it, with no clones and no partial-move conflicts.
+    let Cli {
+        backend,
+        image,
+        gfx_override,
+        gpu,
+        no_home,
+        read_only_home,
+        dry_run,
+        command,
+    } = Cli::parse();
 
-    match &cli.command {
-        Command::Enter {
-            gpu,
-            name,
-            ephemeral,
-        } => {
-            let mut overrides = cli.overrides(gpu.as_deref());
-            overrides.name = name.clone();
-            overrides.ephemeral = *ephemeral;
-            execute(&overrides, Vec::new(), true, cli.dry_run)
-        }
+    match command {
         Command::Run {
             name,
             ephemeral,
             command,
         } => {
-            if command.is_empty() {
-                anyhow::bail!(
-                    "`gpubox run` requires a command, e.g. `gpubox run -- python train.py`"
-                );
-            }
-            let mut overrides = cli.overrides(None);
-            overrides.name = name.clone();
-            overrides.ephemeral = *ephemeral;
-            execute(&overrides, command.clone(), false, cli.dry_run)
+            let interactive = command.is_empty();
+            let mut overrides =
+                overrides_from(backend, image, gfx_override, gpu, no_home, read_only_home);
+            overrides.name = name;
+            overrides.ephemeral = ephemeral;
+            execute(&overrides, command, interactive, dry_run)
         }
-        Command::Rm { name } => rm_cmd(&cli, name.as_deref()),
+        Command::Rm { name } => rm_cmd(backend, dry_run, name.as_deref()),
         Command::Generate { format, output } => {
-            let overrides = cli.overrides(None);
+            let overrides =
+                overrides_from(backend, image, gfx_override, gpu, no_home, read_only_home);
             generate_cmd(&overrides, format.as_deref(), output.as_deref())?;
             Ok(0)
         }
         Command::Doctor { json, report } => {
-            let overrides = cli.overrides(None);
-            if *report {
+            let overrides =
+                overrides_from(backend, image, gfx_override, gpu, no_home, read_only_home);
+            if report {
                 println!("{}", crate::doctor::probe_snapshot_json()?);
-            } else if *json {
+            } else if json {
                 println!("{}", crate::doctor::report_json(&overrides)?);
             } else {
                 print!("{}", crate::doctor::report(&overrides)?);
@@ -191,7 +191,7 @@ pub fn run() -> Result<i32> {
         Command::Completions { shell } => {
             let mut cmd = Cli::command();
             let name = cmd.get_name().to_string();
-            clap_complete::generate(*shell, &mut cmd, name, &mut std::io::stdout());
+            clap_complete::generate(shell, &mut cmd, name, &mut std::io::stdout());
             Ok(0)
         }
         Command::Man => {
@@ -213,22 +213,22 @@ fn execute(
 
     // Persistence is the default (distrobox/toolbox's whole appeal is
     // that the box feels like a second home instead of vanishing on
-    // exit): every `enter`/`run` reattaches to a container named after
-    // either `--name` or, absent that, the resolved stack
-    // (`cuda`/`rocm`/`vulkan`/...), rather than a one-off `--rm`
-    // container. `--rm` opts back into the old throwaway behavior.
-    // Backends with no notion of a persistent container (Seatbelt runs
-    // natively on the host; Windows Sandbox always boots a clean VM by
-    // design) silently fall through to the ephemeral/native path below -
-    // unless the user *explicitly* asked for `--name` on one of them,
-    // which is an error rather than being quietly ignored.
+    // exit): every `gpubox run` reattaches to a container - `gpubox`,
+    // shared across every stack/hardware config, or `gpubox-<name>` with
+    // `--name <name>` - rather than a one-off `--rm` container. `--rm`
+    // opts back into the old throwaway behavior. Backends with no notion
+    // of a persistent container (Seatbelt runs natively on the host;
+    // Windows Sandbox always boots a clean VM by design) silently fall
+    // through to the ephemeral/native path below - unless the user
+    // *explicitly* asked for `--name` on one of them, which is an error
+    // rather than being quietly ignored.
     if !overrides.ephemeral {
-        let name = overrides
-            .name
-            .clone()
-            .unwrap_or_else(|| plan.resolved.stack.clone());
+        let full_name = match &overrides.name {
+            Some(name) => container::container_name(name),
+            None => container::DEFAULT_CONTAINER_NAME.to_string(),
+        };
         match plan.engine.as_container_engine() {
-            Some(engine) => return execute_named(engine, &mut plan, &name, dry_run),
+            Some(engine) => return execute_named(engine, &mut plan, &full_name, dry_run),
             None if overrides.name.is_some() => {
                 anyhow::bail!(
                     "--name is only supported with the docker/podman backends (resolved \
@@ -259,15 +259,17 @@ fn execute(
 }
 
 /// The persistent-container path (the default, or explicit `--name`):
-/// create-or-reattach a persistent container, then exec into it. See
-/// `container` module docs for the full rationale.
+/// create-or-reattach a persistent container, then exec into it. `name`
+/// is already the fully-qualified container name (`gpubox` or
+/// `gpubox-<name>` - see [`container::DEFAULT_CONTAINER_NAME`]/
+/// [`container::container_name`]). See `container` module docs for the
+/// full rationale.
 fn execute_named(
     engine: backend::linux::ContainerEngine,
     plan: &mut Plan,
-    name: &str,
+    full_name: &str,
     dry_run: bool,
 ) -> Result<i32> {
-    let full_name = container::container_name(name);
     let engine_program = engine.program();
 
     if !dry_run {
@@ -275,19 +277,19 @@ fn execute_named(
         cache::ensure_cached_image(engine_program, &plan.resolved, &mut plan.spec)?;
     }
 
-    let state = container::inspect(engine_program, &full_name);
+    let state = container::inspect(engine_program, full_name);
 
     let mut setup: Vec<Invocation> = Vec::new();
     match state {
         container::ContainerState::Missing => {
-            setup.push(container::create_invocation(engine, &plan.spec, &full_name));
+            setup.push(container::create_invocation(engine, &plan.spec, full_name));
         }
         container::ContainerState::Stopped => {
-            setup.push(container::start_invocation(engine, &full_name));
+            setup.push(container::start_invocation(engine, full_name));
         }
         container::ContainerState::Running => {}
     }
-    let exec_invocation = container::exec_invocation(engine, &plan.spec, &full_name);
+    let exec_invocation = container::exec_invocation(engine, &plan.spec, full_name);
 
     if dry_run {
         println!(
@@ -318,37 +320,25 @@ fn execute_named(
     run_invocation(&exec_invocation)
 }
 
-fn rm_cmd(cli: &Cli, name: Option<&str>) -> Result<i32> {
-    // An explicit name needs nothing beyond the engine choice - skip the
-    // hardware probe entirely (it walks /sys/class/drm on Linux or shells
-    // out to WMI on Windows, so it's neither instant nor guaranteed to
-    // succeed everywhere, and would be pure overhead here). Only fall
-    // back to a full `launch::plan` when no name was given: `gpubox rm`
-    // with no arguments has to know the resolved stack, since that's the
-    // same name `enter`/`run` would use without `--name`, so it "just
-    // works" as the mirror image of plain `gpubox enter`.
-    let (engine, name) = match name {
-        Some(name) => {
-            let engine = match &cli.backend {
-                Some(name) => backend::Engine::parse(name)
-                    .ok_or_else(|| anyhow::anyhow!("unrecognized --backend `{name}`"))?,
-                None => backend::Engine::default_for_platform(),
-            };
-            (engine, name.to_string())
-        }
-        None => {
-            let overrides = cli.overrides(None);
-            let plan = launch::plan(&overrides, Vec::new(), true)?;
-            (plan.engine, plan.resolved.stack)
-        }
+fn rm_cmd(backend: Option<String>, dry_run: bool, name: Option<&str>) -> Result<i32> {
+    // Unlike `run`, `rm` never needs a hardware probe: the default
+    // container name is the fixed `container::DEFAULT_CONTAINER_NAME`
+    // ("gpubox"), not derived from the resolved stack, so picking the
+    // engine only ever needs `--backend`/the platform default.
+    let engine = match &backend {
+        Some(name) => backend::Engine::parse(name)
+            .ok_or_else(|| anyhow::anyhow!("unrecognized --backend `{name}`"))?,
+        None => backend::Engine::default_for_platform(),
     };
-
     let engine = engine.as_container_engine().ok_or_else(|| {
         anyhow::anyhow!("`gpubox rm` is only supported with the docker/podman backends")
     })?;
-    let full_name = container::container_name(&name);
+    let full_name = match name {
+        Some(name) => container::container_name(name),
+        None => container::DEFAULT_CONTAINER_NAME.to_string(),
+    };
 
-    if cli.dry_run {
+    if dry_run {
         println!("{} rm -f {full_name}", engine.program());
         return Ok(0);
     }
