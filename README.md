@@ -5,7 +5,7 @@ _See also: [Introducing gpubox](https://ericcurtin.github.io/gpubox/blog/2026-07
 Auto-detecting GPU container launcher. Type one command - `gpubox enter` -
 and land in a shell where `nvidia-smi`, `rocm-smi`, or `vulkaninfo` just
 works, with your home directory, dotfiles, and current working directory
-mounted through, distrobox-style. The host needs nothing GPU-vendor
+mounted through. The host needs nothing GPU-vendor
 specific installed; gpubox figures out what's there and picks the right
 container image for you.
 
