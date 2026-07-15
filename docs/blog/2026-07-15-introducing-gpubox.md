@@ -1,6 +1,6 @@
 ---
 layout: default
-title: "Introducing gpubox: a GPU-aware, distrobox-style container launcher"
+title: "Introducing gpubox: a GPU-aware, container launcher"
 date: 2026-07-15
 ---
 
