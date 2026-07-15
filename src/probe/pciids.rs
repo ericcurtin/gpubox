@@ -65,9 +65,53 @@ pub fn classify(vendor_id: u16, device_id: u16) -> GpuClass {
     }
 }
 
+/// Structural checks over `data/pci_ids.toml`: every device id key must be
+/// a well-formed `0xNNNN` hex literal, and every arch tag value must match
+/// the naming convention documented at the top of the file (so a typo'd
+/// arch tag doesn't silently fail to resolve in `data/quirks.toml`
+/// instead of being caught here). Runs as part of `cargo test` in CI.
+pub fn validate_pci_ids_db() -> anyhow::Result<()> {
+    for (vendor, table, expect) in [("nvidia", &db().nvidia, "sm_"), ("amd", &db().amd, "gfx")] {
+        for (device_id, arch) in table {
+            validate_device_id_key(vendor, device_id)?;
+            if !arch.starts_with(expect) {
+                anyhow::bail!(
+                    "data/pci_ids.toml: `[{vendor}]` `{device_id}` = `{arch}` doesn't look like \
+                     a `{expect}*` arch tag"
+                );
+            }
+        }
+    }
+    for (device_id, class) in &db().intel {
+        validate_device_id_key("intel", device_id)?;
+        if !matches!(class.as_str(), "arc" | "xe" | "igpu") {
+            anyhow::bail!(
+                "data/pci_ids.toml: `[intel]` `{device_id}` = `{class}` must be one of \
+                 arc/xe/igpu"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_device_id_key(vendor: &str, device_id: &str) -> anyhow::Result<()> {
+    let hex = device_id.strip_prefix("0x").ok_or_else(|| {
+        anyhow::anyhow!("data/pci_ids.toml: `[{vendor}]` key `{device_id}` must start with `0x`")
+    })?;
+    u16::from_str_radix(hex, 16).map_err(|_| {
+        anyhow::anyhow!("data/pci_ids.toml: `[{vendor}]` key `{device_id}` isn't valid hex")
+    })?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pci_ids_db_passes_schema_validation() {
+        validate_pci_ids_db().unwrap();
+    }
 
     #[test]
     fn known_nvidia_ada_device() {

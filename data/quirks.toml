@@ -20,25 +20,66 @@
 # used when the detected arch tag has no specific rule: this is what makes
 # newly-released hardware degrade gracefully instead of failing outright.
 
+# `windows_image` is only consulted by `Engine::WindowsContainer` (a
+# process-isolated Windows container with GPU compute passthrough - see
+# `src/backend/windows_container.rs` - used instead of Windows Sandbox for
+# CUDA, since Sandbox's <VGpu> is WDDM/DirectX-only paravirtualization and
+# cannot run CUDA at all). Unlike `image`, this can't be a full "just
+# works" CUDA image: Microsoft/NVIDIA don't publish one, because the GPU
+# *driver* has to come from the host (baking one into the image can
+# conflict with it) - only the CUDA *toolkit* belongs in the image. This
+# points at a real, pullable plain Windows base; installing the toolkit
+# on top is on the user (or their own derived image), which is why every
+# entry below also carries a `notes` explaining that.
 [nvidia.sm_75]
 stack = "cuda"
 image = "nvidia/cuda:12.9.2-devel-ubuntu24.04"
+windows_image = "mcr.microsoft.com/windows/servercore:ltsc2022"
+notes = """
+Windows Container GPU passthrough (Engine::WindowsContainer) needs the \
+CUDA toolkit installed into this base image yourself - the GPU driver \
+itself comes from the host automatically and must not be baked in.
+"""
 
 [nvidia.sm_80]
 stack = "cuda"
 image = "nvidia/cuda:12.9.2-devel-ubuntu24.04"
+windows_image = "mcr.microsoft.com/windows/servercore:ltsc2022"
+notes = """
+Windows Container GPU passthrough (Engine::WindowsContainer) needs the \
+CUDA toolkit installed into this base image yourself - the GPU driver \
+itself comes from the host automatically and must not be baked in.
+"""
 
 [nvidia.sm_86]
 stack = "cuda"
 image = "nvidia/cuda:12.9.2-devel-ubuntu24.04"
+windows_image = "mcr.microsoft.com/windows/servercore:ltsc2022"
+notes = """
+Windows Container GPU passthrough (Engine::WindowsContainer) needs the \
+CUDA toolkit installed into this base image yourself - the GPU driver \
+itself comes from the host automatically and must not be baked in.
+"""
 
 [nvidia.sm_89]
 stack = "cuda"
 image = "nvidia/cuda:12.9.2-devel-ubuntu24.04"
+windows_image = "mcr.microsoft.com/windows/servercore:ltsc2022"
+notes = """
+Windows Container GPU passthrough (Engine::WindowsContainer) needs the \
+CUDA toolkit installed into this base image yourself - the GPU driver \
+itself comes from the host automatically and must not be baked in.
+"""
 
 [nvidia.sm_90]
 stack = "cuda"
 image = "nvidia/cuda:12.9.2-devel-ubuntu24.04"
+windows_image = "mcr.microsoft.com/windows/servercore:ltsc2022"
+notes = """
+Windows Container GPU passthrough (Engine::WindowsContainer) needs the \
+CUDA toolkit installed into this base image yourself - the GPU driver \
+itself comes from the host automatically and must not be baked in.
+"""
 
 [nvidia.unknown]
 stack = "vulkan"

@@ -76,4 +76,20 @@ mod tests {
     fn rejects_malformed_line() {
         assert!(parse_pnp_device_id("not a pnp id").is_none());
     }
+
+    /// WMI's `Win32_VideoController` lists one row per adapter, so a
+    /// hybrid laptop (Intel iGPU + NVIDIA dGPU) surfaces as multiple
+    /// lines from a single `Get-CimInstance` call; both must parse.
+    #[test]
+    fn multiple_lines_yield_multiple_devices() {
+        let output = concat!(
+            r"PCI\VEN_8086&DEV_46A6&SUBSYS_00000000&REV_0C\3&11583659&0&10",
+            "\n",
+            r"PCI\VEN_10DE&DEV_2684&SUBSYS_87131458&REV_A1\4&1a2b3c4d&0&0008",
+        );
+        let devices: Vec<GpuDevice> = output.lines().filter_map(parse_pnp_device_id).collect();
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[0].vendor_id, Some(0x8086));
+        assert_eq!(devices[1].vendor_id, Some(0x10de));
+    }
 }

@@ -17,16 +17,18 @@ mod pciids;
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 mod windows;
 
-pub use pciids::classify;
+pub use pciids::{classify, validate_pci_ids_db};
 
 #[cfg(target_os = "linux")]
 pub use linux::{cdi_available, has_kfd, has_vulkan_icd};
 
+use serde::Serialize;
 use std::fmt;
 
 /// Normalized classification of a piece of GPU hardware, independent of the
 /// raw vendor/device id pair used to derive it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "vendor", rename_all = "lowercase")]
 pub enum GpuClass {
     /// NVIDIA GPU, `arch` is a CUDA compute-capability tag, e.g. `"sm_86"`,
     /// or `"unknown"` if the device id wasn't recognized.
@@ -59,7 +61,7 @@ impl fmt::Display for GpuClass {
 }
 
 /// A single detected GPU device.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GpuDevice {
     /// PCI vendor id, e.g. `0x10de` for NVIDIA. `None` on platforms (or
     /// device classes) where PCI enumeration doesn't apply, e.g. Apple
@@ -143,6 +145,54 @@ pub fn pick_primary(devices: &[GpuDevice]) -> &GpuDevice {
         .unwrap_or(&devices[0])
 }
 
+/// True if `class` matches a coarse vendor/family name the way a user
+/// would type it on the command line, e.g. `gpubox enter nvidia` or
+/// `--gpu amd`. Deliberately loose (substring-free, case-insensitive
+/// exact keyword match) so it stays stable as new arch tags are added.
+fn class_matches_name(class: &GpuClass, name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    match class {
+        GpuClass::Nvidia { .. } => matches!(name.as_str(), "nvidia" | "cuda"),
+        GpuClass::Amd { .. } => matches!(name.as_str(), "amd" | "rocm"),
+        GpuClass::Intel { .. } => matches!(name.as_str(), "intel" | "oneapi"),
+        GpuClass::Apple => matches!(name.as_str(), "apple" | "metal"),
+        GpuClass::Vulkan => name == "vulkan",
+        GpuClass::None => matches!(name.as_str(), "cpu" | "none"),
+    }
+}
+
+/// Select a specific device out of `devices` by a user-provided
+/// `--gpu`/positional selector: either a 0-based index into the detected
+/// list, or a coarse vendor/family name (`nvidia`, `amd`, `intel`,
+/// `apple`, `vulkan`, `cpu`). Multi-GPU and hybrid systems (e.g. an Intel
+/// iGPU alongside an NVIDIA dGPU) are common, so silently picking one via
+/// [`pick_primary`] isn't always right - this is how a user overrides
+/// that choice explicitly.
+pub fn select(devices: &[GpuDevice], selector: &str) -> anyhow::Result<GpuDevice> {
+    if let Ok(index) = selector.parse::<usize>() {
+        return devices.get(index).cloned().ok_or_else(|| {
+            if devices.is_empty() {
+                anyhow::anyhow!("--gpu {index} is out of range; no GPUs detected")
+            } else {
+                anyhow::anyhow!(
+                    "--gpu {index} is out of range; {} GPU(s) detected (indices 0..{})",
+                    devices.len(),
+                    devices.len() - 1
+                )
+            }
+        });
+    }
+    devices
+        .iter()
+        .find(|d| class_matches_name(&d.class, selector))
+        .cloned()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no detected GPU matches `{selector}`; run `gpubox doctor` to see what was found"
+            )
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,5 +228,70 @@ mod tests {
         ];
         let primary = pick_primary(&devices);
         assert!(matches!(primary.class, GpuClass::Nvidia { .. }));
+    }
+
+    fn hybrid_devices() -> Vec<GpuDevice> {
+        vec![
+            GpuDevice {
+                vendor_id: Some(0x8086),
+                device_id: Some(0x46a6),
+                node: Some("/dev/dri/card0".into()),
+                class: GpuClass::Intel { class: "xe".into() },
+            },
+            GpuDevice {
+                vendor_id: Some(0x10de),
+                device_id: Some(0x2684),
+                node: Some("/dev/dri/card1".into()),
+                class: GpuClass::Nvidia {
+                    arch: "sm_89".into(),
+                },
+            },
+        ]
+    }
+
+    #[test]
+    fn select_by_index_picks_that_exact_device() {
+        let devices = hybrid_devices();
+        let picked = select(&devices, "0").unwrap();
+        assert_eq!(picked.class, devices[0].class);
+        let picked = select(&devices, "1").unwrap();
+        assert_eq!(picked.class, devices[1].class);
+    }
+
+    #[test]
+    fn select_by_index_out_of_range_errors() {
+        let devices = hybrid_devices();
+        let err = select(&devices, "5").unwrap_err();
+        // Must mention the actual valid range, not a misleading `0..0`.
+        assert!(err.to_string().contains("0..1"));
+    }
+
+    #[test]
+    fn select_by_index_on_empty_device_list_gives_a_clear_error() {
+        // No `0..0`-style implication that index 0 would be valid - there
+        // are no GPUs to select from at all.
+        let err = select(&[], "0").unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("no GPUs detected"));
+        assert!(!message.contains("0.."));
+    }
+
+    #[test]
+    fn select_by_vendor_name_on_hybrid_laptop() {
+        // Intel iGPU + NVIDIA dGPU, the exact scenario multi-GPU support
+        // is for: pick_primary would silently choose NVIDIA, but the user
+        // must be able to explicitly ask for the Intel device instead.
+        let devices = hybrid_devices();
+        let picked = select(&devices, "intel").unwrap();
+        assert!(matches!(picked.class, GpuClass::Intel { .. }));
+        let picked = select(&devices, "NVIDIA").unwrap();
+        assert!(matches!(picked.class, GpuClass::Nvidia { .. }));
+    }
+
+    #[test]
+    fn select_by_unmatched_name_errors() {
+        let devices = hybrid_devices();
+        assert!(select(&devices, "amd").is_err());
+        assert!(select(&devices, "banana").is_err());
     }
 }

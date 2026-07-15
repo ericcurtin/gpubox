@@ -18,7 +18,9 @@
 //! Seatbelt-profile/`.wsb` file instead of running anything.
 
 pub mod backend;
+pub mod cache;
 pub mod cli;
+pub mod container;
 #[cfg(target_os = "linux")]
 pub mod device;
 pub mod doctor;

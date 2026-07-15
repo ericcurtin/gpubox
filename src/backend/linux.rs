@@ -11,7 +11,7 @@ pub enum ContainerEngine {
 }
 
 impl ContainerEngine {
-    fn program(self) -> &'static str {
+    pub fn program(self) -> &'static str {
         match self {
             ContainerEngine::Docker => "docker",
             ContainerEngine::Podman => "podman",
@@ -96,6 +96,22 @@ fn wrapper_script(identity: &HostIdentity, packages: &[String]) -> String {
 /// quadlet`, so generated artifacts stay faithful to what `enter`/`run`
 /// actually does.
 pub fn command_argv(spec: &LaunchSpec) -> Vec<String> {
+    let tail = if spec.command.is_empty() {
+        vec!["/bin/bash".to_string()]
+    } else {
+        spec.command.clone()
+    };
+    command_argv_with_tail(spec, &tail)
+}
+
+/// Like [`command_argv`], but with an arbitrary final command instead of
+/// `spec.command`/an interactive shell. Used by [`crate::container`] to
+/// create a persistent named container: the wrapper still needs to run
+/// (passwd/group fixup, one-time package install) before the container
+/// settles into a keep-alive command (`sleep infinity`) rather than the
+/// user's actual workload, which instead runs later over `exec` against
+/// the already-initialized container.
+pub fn command_argv_with_tail(spec: &LaunchSpec, tail: &[String]) -> Vec<String> {
     let identity = mounts::current_identity();
     let script = wrapper_script(&identity, &spec.packages);
 
@@ -105,20 +121,15 @@ pub fn command_argv(spec: &LaunchSpec) -> Vec<String> {
         script,
         "gpubox".to_string(),
     ];
-    if spec.command.is_empty() {
-        argv.push("/bin/bash".to_string());
-    } else {
-        argv.extend(spec.command.iter().cloned());
-    }
+    argv.extend(tail.iter().cloned());
     argv
 }
 
-pub fn build_invocation(engine: ContainerEngine, spec: &LaunchSpec) -> Invocation {
-    let mut args = vec!["run".to_string(), "--rm".to_string()];
-
-    if spec.interactive {
-        args.push("-it".to_string());
-    }
+/// The shared `-v`/`-e`/device/`-w`/image portion of a `run` invocation,
+/// common to the ephemeral (`--rm`) path here and the persistent-container
+/// creation path in [`crate::container`].
+pub fn run_args_common(spec: &LaunchSpec) -> Vec<String> {
+    let mut args = Vec::new();
 
     for mount in &spec.mounts {
         let ro = if mount.read_only { ":ro" } else { "" };
@@ -144,6 +155,17 @@ pub fn build_invocation(engine: ContainerEngine, spec: &LaunchSpec) -> Invocatio
         args.push(workdir.display().to_string());
     }
 
+    args
+}
+
+pub fn build_invocation(engine: ContainerEngine, spec: &LaunchSpec) -> Invocation {
+    let mut args = vec!["run".to_string(), "--rm".to_string()];
+
+    if spec.interactive {
+        args.push("-it".to_string());
+    }
+
+    args.extend(run_args_common(spec));
     args.push(spec.image.clone());
     args.extend(command_argv(spec));
 
