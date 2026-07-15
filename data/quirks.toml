@@ -5,6 +5,12 @@
 # container image, and any environment variable overrides needed to make
 # that stack actually work on that hardware.
 #
+# `image` must be a real, pullable image reference - no placeholder
+# namespaces. Where no single upstream vendor image fits (the Vulkan and
+# CPU fallbacks), we point at a plain upstream distro image plus an
+# optional `packages` list of apt packages to layer on top via `gpubox
+# generate --format containerfile`.
+#
 # Community contributions welcome. If you have a card that needs a
 # special-case env var (e.g. "gfx90c reports as unsupported but works with
 # ROCm if you set HSA_OVERRIDE_GFX_VERSION=9.0.0"), add an entry below and
@@ -16,27 +22,28 @@
 
 [nvidia.sm_75]
 stack = "cuda"
-image = "gpubox/cuda:12.4"
+image = "nvidia/cuda:12.4.1-devel-ubuntu22.04"
 
 [nvidia.sm_80]
 stack = "cuda"
-image = "gpubox/cuda:12.4"
+image = "nvidia/cuda:12.4.1-devel-ubuntu22.04"
 
 [nvidia.sm_86]
 stack = "cuda"
-image = "gpubox/cuda:12.4"
+image = "nvidia/cuda:12.4.1-devel-ubuntu22.04"
 
 [nvidia.sm_89]
 stack = "cuda"
-image = "gpubox/cuda:12.4"
+image = "nvidia/cuda:12.4.1-devel-ubuntu22.04"
 
 [nvidia.sm_90]
 stack = "cuda"
-image = "gpubox/cuda:12.4"
+image = "nvidia/cuda:12.4.1-devel-ubuntu22.04"
 
 [nvidia.unknown]
 stack = "vulkan"
-image = "gpubox/vulkan:latest"
+image = "ubuntu:24.04"
+packages = ["mesa-vulkan-drivers", "vulkan-tools", "libvulkan1"]
 notes = """
 Unrecognized NVIDIA compute capability. Falling back to the Vulkan \
 runtime. Please file a PR adding this device id to data/pci_ids.toml \
@@ -45,11 +52,11 @@ so gpubox can pick the right CUDA image next time.
 
 [amd.gfx900]
 stack = "rocm"
-image = "gpubox/rocm:6.1"
+image = "rocm/rocm-terminal:6.1"
 
 [amd.gfx902]
 stack = "rocm"
-image = "gpubox/rocm:6.1"
+image = "rocm/rocm-terminal:6.1"
 env = { HSA_OVERRIDE_GFX_VERSION = "9.0.0" }
 notes = """
 Raven Ridge (gfx902) is not on ROCm's official support list but works \
@@ -58,7 +65,7 @@ when HSA_OVERRIDE_GFX_VERSION reports it as gfx9.0.0.
 
 [amd.gfx90c]
 stack = "rocm"
-image = "gpubox/rocm:6.1"
+image = "rocm/rocm-terminal:6.1"
 env = { HSA_OVERRIDE_GFX_VERSION = "9.0.0" }
 notes = """
 Renoir (gfx90c) integrated graphics is not officially supported by ROCm \
@@ -68,42 +75,43 @@ gfx9.0.0.
 
 [amd.gfx1030]
 stack = "rocm"
-image = "gpubox/rocm:6.1"
+image = "rocm/rocm-terminal:6.1"
 
 [amd.gfx1031]
 stack = "rocm"
-image = "gpubox/rocm:6.1"
+image = "rocm/rocm-terminal:6.1"
 env = { HSA_OVERRIDE_GFX_VERSION = "10.3.0" }
 notes = "Navi 22 (gfx1031) needs HSA_OVERRIDE_GFX_VERSION=10.3.0 on some ROCm point releases."
 
 [amd.gfx1032]
 stack = "rocm"
-image = "gpubox/rocm:6.1"
+image = "rocm/rocm-terminal:6.1"
 env = { HSA_OVERRIDE_GFX_VERSION = "10.3.0" }
 
 [amd.gfx1100]
 stack = "rocm"
-image = "gpubox/rocm:6.1"
+image = "rocm/rocm-terminal:6.1"
 
 [amd.gfx1101]
 stack = "rocm"
-image = "gpubox/rocm:6.1"
+image = "rocm/rocm-terminal:6.1"
 
 [amd.gfx1102]
 stack = "rocm"
-image = "gpubox/rocm:6.1"
+image = "rocm/rocm-terminal:6.1"
 
 [amd.gfx90a]
 stack = "rocm"
-image = "gpubox/rocm:6.1"
+image = "rocm/rocm-terminal:6.1"
 
 [amd.gfx942]
 stack = "rocm"
-image = "gpubox/rocm:6.1"
+image = "rocm/rocm-terminal:6.1"
 
 [amd.unknown]
 stack = "vulkan"
-image = "gpubox/vulkan:latest"
+image = "ubuntu:24.04"
+packages = ["mesa-vulkan-drivers", "vulkan-tools", "libvulkan1"]
 notes = """
 Unrecognized AMD gfx architecture. Falling back to the Vulkan runtime. \
 Please file a PR adding this device id to data/pci_ids.toml, and if you \
@@ -112,15 +120,16 @@ know it needs an HSA_OVERRIDE_GFX_VERSION quirk, add that here too.
 
 [intel.arc]
 stack = "oneapi"
-image = "gpubox/oneapi:2024.1"
+image = "intel/oneapi-basekit:2025.3.2-0-devel-ubuntu24.04"
 
 [intel.xe]
 stack = "oneapi"
-image = "gpubox/oneapi:2024.1"
+image = "intel/oneapi-basekit:2025.3.2-0-devel-ubuntu24.04"
 
 [intel.igpu]
 stack = "vulkan"
-image = "gpubox/vulkan:latest"
+image = "ubuntu:24.04"
+packages = ["mesa-vulkan-drivers", "vulkan-tools", "libvulkan1"]
 notes = """
 Pre-Xe Intel integrated graphics lack Level Zero / oneAPI support; \
 using the Vulkan fallback instead.
@@ -128,20 +137,26 @@ using the Vulkan fallback instead.
 
 [apple.default]
 stack = "metal"
-image = "gpubox/metal:latest"
+image = "n/a (Seatbelt runs the command natively on the host; there is no container image)"
 notes = """
 macOS containers run natively under Seatbelt sandboxing rather than a \
-Linux container runtime, so there is no device node to pass through. \
-GPU access happens via Metal on the host and is available to the \
-sandboxed process directly.
+Linux container runtime, so there is no device node - or image - to pass \
+through. GPU access happens via Metal on the host and is available to \
+the sandboxed process directly.
 """
 
 [vulkan.default]
 stack = "vulkan"
-image = "gpubox/vulkan:latest"
-notes = "No vendor-specific stack matched; using the universal Vulkan fallback image."
+image = "ubuntu:24.04"
+packages = ["mesa-vulkan-drivers", "vulkan-tools", "libvulkan1"]
+notes = """
+No vendor-specific stack matched; using a plain Ubuntu base with Mesa's \
+Vulkan drivers layered on top as the universal fallback. Run `gpubox \
+generate --format containerfile` to see (or customize) exactly what gets \
+installed.
+"""
 
 [none.default]
 stack = "cpu"
-image = "gpubox/cpu:latest"
-notes = "No GPU detected. Running on CPU."
+image = "ubuntu:24.04"
+notes = "No GPU detected. Running on CPU with a plain Ubuntu base image."

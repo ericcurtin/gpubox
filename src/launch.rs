@@ -185,7 +185,7 @@ mod tests {
         };
         let plan = plan(&overrides, vec![], true).unwrap();
         assert_eq!(plan.resolved.stack, "rocm");
-        assert_eq!(plan.spec.image, "gpubox/rocm:6.1");
+        assert_eq!(plan.spec.image, "rocm/rocm-terminal:6.1");
     }
 
     #[test]

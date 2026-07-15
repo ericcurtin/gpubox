@@ -62,6 +62,21 @@ running anything: a Containerfile, a Compose file, a Podman Quadlet unit,
 a Seatbelt `.sb` profile, or a Windows Sandbox `.wsb` config - so the
 "magic" is reproducible in CI or checked into a repo.
 
+### Default images (Linux)
+
+Real, pullable upstream images - never a placeholder namespace. Override
+any of them per-invocation with `--image`, or permanently by editing
+`data/quirks.toml`.
+
+| Stack    | Default image                                    | Notes |
+|----------|---------------------------------------------------|-------|
+| `cuda`   | `nvidia/cuda:12.4.1-devel-ubuntu22.04`             | NVIDIA's official CUDA devel image |
+| `rocm`   | `rocm/rocm-terminal:6.1`                           | AMD's official interactive ROCm image |
+| `oneapi` | `intel/oneapi-basekit:2025.3.2-0-devel-ubuntu24.04`| Intel's official oneAPI base toolkit |
+| `vulkan` | `ubuntu:24.04` + `mesa-vulkan-drivers`, `vulkan-tools`, `libvulkan1` | No single canonical vendor-neutral Vulkan image exists, so gpubox layers Mesa's Vulkan drivers onto plain Ubuntu; see `packages` in `data/quirks.toml` |
+| `cpu`    | `ubuntu:24.04`                                     | Plain fallback, no GPU packages |
+| `metal`  | *(none)*                                           | macOS only; Seatbelt runs the command natively on the host, there's no container image |
+
 ## Usage
 
 ```

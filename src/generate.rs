@@ -83,6 +83,13 @@ fn render_containerfile(resolved: &ResolvedStack, spec: &LaunchSpec) -> String {
     );
     let _ = writeln!(out, "FROM {}", spec.image);
     out.push('\n');
+    if !resolved.packages.is_empty() {
+        let _ = writeln!(
+            out,
+            "RUN apt-get update && apt-get install -y --no-install-recommends \\\n    {} \\\n    && rm -rf /var/lib/apt/lists/*",
+            resolved.packages.join(" \\\n    ")
+        );
+    }
     for (key, value) in &spec.env {
         let _ = writeln!(out, "ENV {key}={value}");
     }
@@ -239,6 +246,17 @@ pub fn validate_format_for_stack(format: Format, resolved: &ResolvedStack) -> Re
     if format == Format::Seatbelt && resolved.stack == "cuda" {
         bail!("Seatbelt sandboxing has no device-injection story for NVIDIA/CUDA; pick a Linux backend for this stack instead");
     }
+    let is_linux_format = matches!(
+        format,
+        Format::Containerfile | Format::Compose | Format::Quadlet
+    );
+    if is_linux_format && resolved.stack == "metal" {
+        bail!(
+            "the `metal` stack runs natively via Seatbelt on macOS and has no container \
+             image to put in a Containerfile/Compose file/Quadlet unit; use `--format seatbelt` \
+             instead"
+        );
+    }
     Ok(())
 }
 
@@ -252,18 +270,19 @@ mod tests {
         ResolvedStack {
             detected: "AMD (gfx90c)".to_string(),
             stack: "rocm".to_string(),
-            image: "gpubox/rocm:6.1".to_string(),
+            image: "rocm/rocm-terminal:6.1".to_string(),
             env: [("HSA_OVERRIDE_GFX_VERSION".to_string(), "9.0.0".to_string())]
                 .into_iter()
                 .collect(),
             notes: Some("gfx90c needs the override quirk.".to_string()),
+            packages: Vec::new(),
             rule_key: "amd.gfx90c".to_string(),
         }
     }
 
     fn spec() -> LaunchSpec {
         LaunchSpec {
-            image: "gpubox/rocm:6.1".to_string(),
+            image: "rocm/rocm-terminal:6.1".to_string(),
             stack: "rocm".to_string(),
             env: vec![("HSA_OVERRIDE_GFX_VERSION".to_string(), "9.0.0".to_string())],
             mounts: vec![BindMount {
@@ -282,15 +301,34 @@ mod tests {
     #[test]
     fn containerfile_includes_from_and_env() {
         let out = render(Format::Containerfile, &resolved(), &spec()).unwrap();
-        assert!(out.contains("FROM gpubox/rocm:6.1"));
+        assert!(out.contains("FROM rocm/rocm-terminal:6.1"));
         assert!(out.contains("ENV HSA_OVERRIDE_GFX_VERSION=9.0.0"));
         assert!(out.contains("gpubox-prompt.sh"));
     }
 
     #[test]
+    fn containerfile_installs_packages_for_fallback_stacks() {
+        let mut vulkan_resolved = resolved();
+        vulkan_resolved.stack = "vulkan".to_string();
+        vulkan_resolved.image = "ubuntu:24.04".to_string();
+        vulkan_resolved.packages = vec![
+            "mesa-vulkan-drivers".to_string(),
+            "vulkan-tools".to_string(),
+        ];
+        let mut vulkan_spec = spec();
+        vulkan_spec.image = "ubuntu:24.04".to_string();
+
+        let out = render(Format::Containerfile, &vulkan_resolved, &vulkan_spec).unwrap();
+        assert!(out.contains("FROM ubuntu:24.04"));
+        assert!(out.contains("apt-get install -y --no-install-recommends"));
+        assert!(out.contains("mesa-vulkan-drivers"));
+        assert!(out.contains("vulkan-tools"));
+    }
+
+    #[test]
     fn compose_includes_volumes_and_devices() {
         let out = render(Format::Compose, &resolved(), &spec()).unwrap();
-        assert!(out.contains("image: gpubox/rocm:6.1"));
+        assert!(out.contains("image: rocm/rocm-terminal:6.1"));
         assert!(out.contains("/home/alice:/home/alice"));
         assert!(out.contains("/dev/dri:/dev/dri"));
         assert!(out.contains("# Equivalent to: docker run"));
@@ -299,7 +337,7 @@ mod tests {
     #[test]
     fn quadlet_passes_device_args_through_podman_args_losslessly() {
         let out = render(Format::Quadlet, &resolved(), &spec()).unwrap();
-        assert!(out.contains("Image=gpubox/rocm:6.1"));
+        assert!(out.contains("Image=rocm/rocm-terminal:6.1"));
         assert!(out.contains("PodmanArgs=--device /dev/dri --group-add keep-groups"));
         assert!(out.contains("WorkingDir=/home/alice/project"));
     }
@@ -311,6 +349,17 @@ mod tests {
         let mut cuda = resolved();
         cuda.stack = "cuda".to_string();
         assert!(validate_format_for_stack(Format::Seatbelt, &cuda).is_err());
+    }
+
+    #[test]
+    fn linux_formats_reject_metal_stack() {
+        let mut metal = resolved();
+        metal.stack = "metal".to_string();
+        for format in [Format::Containerfile, Format::Compose, Format::Quadlet] {
+            assert!(validate_format_for_stack(format, &metal).is_err());
+        }
+        // Seatbelt is exactly the right format for the metal stack.
+        assert!(validate_format_for_stack(Format::Seatbelt, &metal).is_ok());
     }
 
     #[test]

@@ -20,6 +20,12 @@ pub struct StackRule {
     pub env: HashMap<String, String>,
     #[serde(default)]
     pub notes: Option<String>,
+    /// Apt packages to layer on top of `image` (used by the Vulkan/CPU
+    /// fallbacks, which start from a plain distro base rather than a
+    /// vendor-published image). Consumed by `gpubox generate --format
+    /// containerfile`; ignored otherwise.
+    #[serde(default)]
+    pub packages: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -63,6 +69,8 @@ pub struct ResolvedStack {
     pub notes: Option<String>,
     /// Which quirks.toml table.key produced this rule, for diagnostics.
     pub rule_key: String,
+    /// Apt packages to layer on top of `image` (see [`StackRule::packages`]).
+    pub packages: Vec<String>,
 }
 
 fn lookup(
@@ -103,6 +111,7 @@ pub fn resolve(class: &GpuClass) -> Result<ResolvedStack> {
         env: rule.env,
         notes: rule.notes,
         rule_key,
+        packages: rule.packages,
     })
 }
 
@@ -173,5 +182,18 @@ mod tests {
     fn vulkan_class_resolves_to_vulkan() {
         let resolved = resolve(&GpuClass::Vulkan).unwrap();
         assert_eq!(resolved.stack, "vulkan");
+        assert_eq!(resolved.image, "ubuntu:24.04");
+        assert!(resolved.packages.iter().any(|p| p == "mesa-vulkan-drivers"));
+    }
+
+    #[test]
+    fn cuda_and_rocm_images_carry_no_apt_packages() {
+        // Vendor images (CUDA/ROCm/oneAPI) already ship their full stack;
+        // only the plain-distro Vulkan/CPU fallbacks need `packages`.
+        let cuda = resolve(&GpuClass::Nvidia {
+            arch: "sm_86".into(),
+        })
+        .unwrap();
+        assert!(cuda.packages.is_empty());
     }
 }
